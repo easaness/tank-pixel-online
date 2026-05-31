@@ -33,8 +33,8 @@ const SPAWN_SAFE_RADIUS = 135;
 const BUMP_BACK_DISTANCE = 10;
 const BUMP_COOLDOWN = 0.12;
 const ITEM_RADIUS = 14;
-const ITEM_MAX_COUNT = 2;
-const ITEM_SPAWN_INTERVAL_MS = 7000;
+const ITEM_MAX_COUNT = 3;
+const ITEM_SPAWN_INTERVAL_MS = 5000;
 const ITEM_EFFECT_TYPES = ['speed', 'fastCharge', 'enemyGiant', 'invisible', 'bigBullet', 'fastBullet'];
 const ITEM_TYPES = [...ITEM_EFFECT_TYPES, 'random'];
 const ITEM_LABELS = {
@@ -245,12 +245,23 @@ function bulletRadius(bullet) {
 
 function activeEffectsForPublic(tank, now = Date.now()) {
   const effects = [];
-  if ((tank.speedUntil || 0) > now) effects.push('加速');
-  if ((tank.fastChargeUntil || 0) > now) effects.push('チャージ短縮');
-  if ((tank.giantUntil || 0) > now) effects.push('巨大化');
-  if ((tank.invisibleUntil || 0) > now) effects.push('透明化');
-  if ((tank.bigBulletUntil || 0) > now) effects.push('大きい弾');
-  if ((tank.fastBulletUntil || 0) > now) effects.push('弾速度上昇');
+  function add(key, name, until) {
+    const remainingMs = (until || 0) - now;
+    if (remainingMs > 0) {
+      effects.push({
+        key,
+        name,
+        remainingMs,
+        remaining: Math.max(0, Math.ceil(remainingMs / 1000)),
+      });
+    }
+  }
+  add('speed', '加速', tank.speedUntil);
+  add('fastCharge', '短縮', tank.fastChargeUntil);
+  add('enemyGiant', '巨大化', tank.giantUntil);
+  add('invisible', '透明', tank.invisibleUntil);
+  add('bigBullet', '大弾', tank.bigBulletUntil);
+  add('fastBullet', '速弾', tank.fastBulletUntil);
   return effects;
 }
 
