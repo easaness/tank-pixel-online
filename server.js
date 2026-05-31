@@ -22,6 +22,8 @@ const CHARGE_TIME = 2;
 const WIN_SCORE = 5;
 const BROADCAST_HZ = 30;
 const OBSTACLE_HALF_WIDTH = 7;
+const OBSTACLE_COUNT = 3;
+const SPAWN_SAFE_RADIUS = 135;
 const BUMP_BACK_DISTANCE = 10;
 const BUMP_COOLDOWN = 0.12;
 const SPAWNS = [
@@ -46,7 +48,7 @@ function isObstacleSafe(line, existing) {
 
   // 初期位置とその周辺は必ず空ける
   for (const spawn of SPAWNS) {
-    if (pointLineDistance(spawn.x, spawn.y, line) < 95) return false;
+    if (pointLineDistance(spawn.x, spawn.y, line) < SPAWN_SAFE_RADIUS) return false;
   }
 
   // 外周に近すぎる線は避ける
@@ -94,7 +96,7 @@ function makeRandomLine(id) {
 
 function generateObstacles() {
   const obstacles = [];
-  const targetCount = 4;
+  const targetCount = OBSTACLE_COUNT;
   let attempts = 0;
 
   while (obstacles.length < targetCount && attempts < 250) {
@@ -108,8 +110,7 @@ function generateObstacles() {
     { id: 'fallback1', x1: 430, y1: 145, x2: 530, y2: 245 },
     { id: 'fallback2', x1: 430, y1: 395, x2: 530, y2: 295 },
     { id: 'fallback3', x1: 320, y1: 120, x2: 320, y2: 220 },
-    { id: 'fallback4', x1: 640, y1: 320, x2: 640, y2: 430 },
-  ];
+     ];
 
   for (const line of fallbacks) {
     if (obstacles.length >= targetCount) break;
@@ -154,7 +155,7 @@ function resetPositions(room) {
     if (!tank) return;
     tank.x = SPAWNS[tank.slot].x;
     tank.y = SPAWNS[tank.slot].y;
-    tank.angle = left ? 0 : Math.PI;
+    tank.angle = tank.slot === 0 ? 0 : Math.PI;
     tank.hold = false;
     tank.charge = 0;
     tank.bumpCooldown = 0;
