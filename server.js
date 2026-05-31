@@ -21,10 +21,11 @@ const BULLET_RADIUS = 6;
 const CHARGE_TIME = 2;
 const WIN_SCORE = 5;
 const BROADCAST_HZ = 30;
+const OBSTACLE_HALF_WIDTH = 7;
 const OBSTACLES = [
-  { id: 'center', x: 430, y: 230, w: 100, h: 80 },
-  { id: 'leftBlock', x: 270, y: 120, w: 90, h: 44 },
-  { id: 'rightBlock', x: 600, y: 376, w: 90, h: 44 },
+  { id: 'centerLine', x1: 480, y1: 170, x2: 480, y2: 370 },
+  { id: 'leftLine', x1: 210, y1: 150, x2: 360, y2: 150 },
+  { id: 'rightLine', x1: 600, y1: 390, x2: 750, y2: 390 },
 ];
 
 const rooms = new Map();
@@ -178,18 +179,28 @@ function emitRoom(room) {
   io.to(room.code).emit('state', publicState(room));
 }
 
-function circleRectHit(cx, cy, radius, rect) {
-  const nearestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
-  const nearestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
-  return Math.hypot(cx - nearestX, cy - nearestY) <= radius;
+function distancePointToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { distance: Math.hypot(px - x1, py - y1), t: 0, nearestX: x1, nearestY: y1 };
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  const nearestX = x1 + t * dx;
+  const nearestY = y1 + t * dy;
+  return { distance: Math.hypot(px - nearestX, py - nearestY), t, nearestX, nearestY };
 }
+
+function circleLineHit(cx, cy, radius, line) {
+  return distancePointToSegment(cx, cy, line.x1, line.y1, line.x2, line.y2).distance <= radius + OBSTACLE_HALF_WIDTH;
+}
+
 
 function tankCanMove(room, tank, nextX, nextY) {
   if (nextX < TANK_RADIUS || nextX > AREA.w - TANK_RADIUS) return false;
   if (nextY < TANK_RADIUS || nextY > AREA.h - TANK_RADIUS) return false;
 
   for (const obstacle of OBSTACLES) {
-    if (circleRectHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
+    if (circleLineHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
   }
 
   for (const other of room.tanks) {
@@ -200,33 +211,42 @@ function tankCanMove(room, tank, nextX, nextY) {
   return true;
 }
 
-function reflectBulletOnObstacle(bullet, prevX, prevY, obstacle) {
-  if (!circleRectHit(bullet.x, bullet.y, BULLET_RADIUS, obstacle)) return false;
+function reflectBulletOnObstacle(bullet, prevX, prevY, line) {
+  if (!circleLineHit(bullet.x, bullet.y, BULLET_RADIUS, line)) return false;
 
-  const wasLeft = prevX <= obstacle.x - BULLET_RADIUS;
-  const wasRight = prevX >= obstacle.x + obstacle.w + BULLET_RADIUS;
-  const wasAbove = prevY <= obstacle.y - BULLET_RADIUS;
-  const wasBelow = prevY >= obstacle.y + obstacle.h + BULLET_RADIUS;
+  const dx = line.x2 - line.x1;
+  const dy = line.y2 - line.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
 
-  if ((wasLeft || wasRight) && !(wasAbove || wasBelow)) {
-    bullet.vx *= -1;
-    bullet.x = wasLeft ? obstacle.x - BULLET_RADIUS : obstacle.x + obstacle.w + BULLET_RADIUS;
-  } else if ((wasAbove || wasBelow) && !(wasLeft || wasRight)) {
-    bullet.vy *= -1;
-    bullet.y = wasAbove ? obstacle.y - BULLET_RADIUS : obstacle.y + obstacle.h + BULLET_RADIUS;
-  } else {
-    const dxLeft = Math.abs(prevX - obstacle.x);
-    const dxRight = Math.abs(prevX - (obstacle.x + obstacle.w));
-    const dyTop = Math.abs(prevY - obstacle.y);
-    const dyBottom = Math.abs(prevY - (obstacle.y + obstacle.h));
-    const minSide = Math.min(dxLeft, dxRight, dyTop, dyBottom);
-    if (minSide === dxLeft || minSide === dxRight) bullet.vx *= -1;
-    else bullet.vy *= -1;
+  // Segment normal. Reflect velocity over the line surface.
+  let nx = -uy;
+  let ny = ux;
+  const dot = bullet.vx * nx + bullet.vy * ny;
+  bullet.vx = bullet.vx - 2 * dot * nx;
+  bullet.vy = bullet.vy - 2 * dot * ny;
+
+  // Push the bullet outside the line so it does not bounce repeatedly in one spot.
+  const nearest = distancePointToSegment(bullet.x, bullet.y, line.x1, line.y1, line.x2, line.y2);
+  let pushX = bullet.x - nearest.nearestX;
+  let pushY = bullet.y - nearest.nearestY;
+  const pushLen = Math.hypot(pushX, pushY);
+  if (pushLen < 0.001) {
+    pushX = prevX - nearest.nearestX;
+    pushY = prevY - nearest.nearestY;
   }
+  const finalLen = Math.hypot(pushX, pushY) || 1;
+  pushX /= finalLen;
+  pushY /= finalLen;
+  const safeDistance = BULLET_RADIUS + OBSTACLE_HALF_WIDTH + 0.6;
+  bullet.x = nearest.nearestX + pushX * safeDistance;
+  bullet.y = nearest.nearestY + pushY * safeDistance;
 
   bullet.bounces += 1;
   return true;
 }
+
 
 function fireBullet(room, tank) {
   const muzzle = TANK_RADIUS + 10;
@@ -335,11 +355,10 @@ function updateRoom(room, dt) {
       if (Math.hypot(dx, dy) <= TANK_RADIUS + BULLET_RADIUS) {
         const scorerSlot = tank.slot === bullet.owner ? 1 - bullet.owner : bullet.owner;
         scorePoint(room, scorerSlot);
-        hit = true;
-        break;
+        return; // 得点・リセット時はフィールド上の弾をすべて消した状態を保つ
       }
     }
-    if (!hit && room.status === 'playing') kept.push(bullet);
+    if (room.status === 'playing') kept.push(bullet);
   }
   room.bullets = kept;
 }

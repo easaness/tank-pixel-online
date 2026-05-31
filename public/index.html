@@ -90,7 +90,7 @@
   <section class="start-screen screen" id="startScreen">
     <div class="hero">
       <h1 class="logo">TANK <span>PIXEL</span></h1>
-      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。障害物も使って戦う5点先取の1対1オンライン対戦です。</p>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。直線の障害物も使って戦う5点先取の1対1オンライン対戦です。</p>
       <div class="start-grid">
         <div class="card">
           <h2>部屋を作る</h2>
@@ -146,7 +146,7 @@
       <div class="rule"><strong>回転</strong>何も押していない間、戦車は自動回転します。</div>
       <div class="rule"><strong>前進</strong>長押し中だけ回転が止まり、その方向へ進みます。</div>
       <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、2秒で弾を発射します。</div>
-      <div class="rule"><strong>反射</strong>弾は壁・障害物で反射し、5回反射すると消えます。</div>
+      <div class="rule"><strong>反射</strong>弾は外壁・直線障害物で反射し、5回反射すると消えます。</div>
       <div class="rule"><strong>勝利</strong>相手か自分に弾が当たると得点処理。5点先取で勝利です。</div>
     </section>
 
@@ -289,23 +289,42 @@
     function drawObstacles() {
       (state.obstacles || []).forEach((o) => {
         ctx.save();
-        ctx.shadowColor = 'rgba(250,204,21,.35)';
-        ctx.shadowBlur = 12;
-        const grad = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);
-        grad.addColorStop(0, '#475569');
-        grad.addColorStop(1, '#1e293b');
-        ctx.fillStyle = grad;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = 'rgba(250,204,21,.45)';
+        ctx.shadowBlur = 16;
+
+        ctx.strokeStyle = 'rgba(2,6,23,.95)';
+        ctx.lineWidth = 22;
+        ctx.beginPath();
+        ctx.moveTo(o.x1, o.y1);
+        ctx.lineTo(o.x2, o.y2);
+        ctx.stroke();
+
         ctx.strokeStyle = '#facc15';
-        ctx.lineWidth = 3;
-        roundRect(o.x, o.y, o.w, o.h, 8, true, true);
-        ctx.strokeStyle = 'rgba(255,255,255,.18)';
-        ctx.lineWidth = 1;
-        for (let x = o.x + 14; x < o.x + o.w; x += 18) {
-          ctx.beginPath(); ctx.moveTo(x, o.y + 6); ctx.lineTo(x - 18, o.y + o.h - 6); ctx.stroke();
-        }
+        ctx.lineWidth = 14;
+        ctx.beginPath();
+        ctx.moveTo(o.x1, o.y1);
+        ctx.lineTo(o.x2, o.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.moveTo(o.x1, o.y1);
+        ctx.lineTo(o.x2, o.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255,255,255,.25)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(o.x1, o.y1);
+        ctx.lineTo(o.x2, o.y2);
+        ctx.stroke();
         ctx.restore();
       });
     }
+
 
     function drawTanks() {
       (state.tanks || []).forEach((tank) => {
