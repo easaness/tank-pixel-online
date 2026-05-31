@@ -90,7 +90,7 @@
   <section class="start-screen screen" id="startScreen">
     <div class="hero">
       <h1 class="logo">TANK <span>PIXEL</span></h1>
-      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、3秒チャージで反射弾を発射。5点先取の1対1オンライン対戦です。</p>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。障害物も使って戦う5点先取の1対1オンライン対戦です。</p>
       <div class="start-grid">
         <div class="card">
           <h2>部屋を作る</h2>
@@ -132,7 +132,7 @@
 
     <section class="hud">
       <div class="gauge-card">
-        <div class="gauge-label"><span>チャージ</span><span id="chargeText">0.0 / 3.0 秒</span></div>
+        <div class="gauge-label"><span>チャージ</span><span id="chargeText">0.0 / 2.0 秒</span></div>
         <div class="gauge"><div class="gauge-fill" id="chargeFill"></div></div>
       </div>
       <button class="hold-button" id="holdBtn">長押しで前進・チャージ</button>
@@ -145,9 +145,9 @@
     <section class="rules">
       <div class="rule"><strong>回転</strong>何も押していない間、戦車は自動回転します。</div>
       <div class="rule"><strong>前進</strong>長押し中だけ回転が止まり、その方向へ進みます。</div>
-      <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、3秒で弾を発射します。</div>
-      <div class="rule"><strong>反射</strong>弾は壁で反射し、5回反射すると消えます。</div>
-      <div class="rule"><strong>勝利</strong>相手に当てると1点。5点先取で勝利です。</div>
+      <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、2秒で弾を発射します。</div>
+      <div class="rule"><strong>反射</strong>弾は壁・障害物で反射し、5回反射すると消えます。</div>
+      <div class="rule"><strong>勝利</strong>相手か自分に弾が当たると得点処理。5点先取で勝利です。</div>
     </section>
 
     <div class="btn-row" style="justify-content:center; margin-top:14px">
@@ -243,8 +243,9 @@
       }
       const mine = state.tanks[mySlot];
       const charge = mine?.charge || 0;
-      $('chargeText').textContent = `${charge.toFixed(1)} / 3.0 秒`;
-      $('chargeFill').style.width = `${Math.min(100, charge / 3 * 100)}%`;
+      const chargeTime = state.chargeTime || 2;
+      $('chargeText').textContent = `${charge.toFixed(1)} / ${chargeTime.toFixed(1)} 秒`;
+      $('chargeFill').style.width = `${Math.min(100, charge / chargeTime * 100)}%`;
     }
 
     function showOverlay(title, text) {
@@ -262,6 +263,7 @@
       }
       ctx.clearRect(0,0,canvas.width,canvas.height);
       drawArena();
+      drawObstacles();
       drawBullets();
       drawTanks();
       drawCountdown();
@@ -281,6 +283,28 @@
       ctx.strokeStyle = 'rgba(250,204,21,.22)';
       ctx.lineWidth = 14;
       ctx.strokeRect(7,7,w-14,h-14);
+    }
+
+
+    function drawObstacles() {
+      (state.obstacles || []).forEach((o) => {
+        ctx.save();
+        ctx.shadowColor = 'rgba(250,204,21,.35)';
+        ctx.shadowBlur = 12;
+        const grad = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);
+        grad.addColorStop(0, '#475569');
+        grad.addColorStop(1, '#1e293b');
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 3;
+        roundRect(o.x, o.y, o.w, o.h, 8, true, true);
+        ctx.strokeStyle = 'rgba(255,255,255,.18)';
+        ctx.lineWidth = 1;
+        for (let x = o.x + 14; x < o.x + o.w; x += 18) {
+          ctx.beginPath(); ctx.moveTo(x, o.y + 6); ctx.lineTo(x - 18, o.y + o.h - 6); ctx.stroke();
+        }
+        ctx.restore();
+      });
     }
 
     function drawTanks() {

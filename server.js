@@ -18,9 +18,14 @@ const TANK_SPEED = 150;
 const ROTATE_SPEED = Math.PI * 0.72;
 const BULLET_SPEED = 360;
 const BULLET_RADIUS = 6;
-const CHARGE_TIME = 3;
+const CHARGE_TIME = 2;
 const WIN_SCORE = 5;
 const BROADCAST_HZ = 30;
+const OBSTACLES = [
+  { id: 'center', x: 430, y: 230, w: 100, h: 80 },
+  { id: 'leftBlock', x: 270, y: 120, w: 90, h: 44 },
+  { id: 'rightBlock', x: 600, y: 376, w: 90, h: 44 },
+];
 
 const rooms = new Map();
 
@@ -72,6 +77,8 @@ function publicState(room) {
     status: room.status,
     winnerSlot: room.winnerSlot,
     winScore: WIN_SCORE,
+    chargeTime: CHARGE_TIME,
+    obstacles: OBSTACLES,
     tanks: room.tanks.map((t) => t && ({
       slot: t.slot,
       name: t.name,
@@ -160,7 +167,7 @@ function startMatch(room) {
     if (tank) tank.score = 0;
   });
   resetPositions(room);
-  room.message = 'ゲーム開始！長押しで前進、3秒チャージで弾を発射します。';
+  room.message = 'ゲーム開始！長押しで前進、2秒チャージで弾を発射します。';
 }
 
 function cryptoToken() {
@@ -169,6 +176,56 @@ function cryptoToken() {
 
 function emitRoom(room) {
   io.to(room.code).emit('state', publicState(room));
+}
+
+function circleRectHit(cx, cy, radius, rect) {
+  const nearestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+  const nearestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+  return Math.hypot(cx - nearestX, cy - nearestY) <= radius;
+}
+
+function tankCanMove(room, tank, nextX, nextY) {
+  if (nextX < TANK_RADIUS || nextX > AREA.w - TANK_RADIUS) return false;
+  if (nextY < TANK_RADIUS || nextY > AREA.h - TANK_RADIUS) return false;
+
+  for (const obstacle of OBSTACLES) {
+    if (circleRectHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
+  }
+
+  for (const other of room.tanks) {
+    if (!other || other.slot === tank.slot) continue;
+    if (Math.hypot(nextX - other.x, nextY - other.y) < TANK_RADIUS * 2) return false;
+  }
+
+  return true;
+}
+
+function reflectBulletOnObstacle(bullet, prevX, prevY, obstacle) {
+  if (!circleRectHit(bullet.x, bullet.y, BULLET_RADIUS, obstacle)) return false;
+
+  const wasLeft = prevX <= obstacle.x - BULLET_RADIUS;
+  const wasRight = prevX >= obstacle.x + obstacle.w + BULLET_RADIUS;
+  const wasAbove = prevY <= obstacle.y - BULLET_RADIUS;
+  const wasBelow = prevY >= obstacle.y + obstacle.h + BULLET_RADIUS;
+
+  if ((wasLeft || wasRight) && !(wasAbove || wasBelow)) {
+    bullet.vx *= -1;
+    bullet.x = wasLeft ? obstacle.x - BULLET_RADIUS : obstacle.x + obstacle.w + BULLET_RADIUS;
+  } else if ((wasAbove || wasBelow) && !(wasLeft || wasRight)) {
+    bullet.vy *= -1;
+    bullet.y = wasAbove ? obstacle.y - BULLET_RADIUS : obstacle.y + obstacle.h + BULLET_RADIUS;
+  } else {
+    const dxLeft = Math.abs(prevX - obstacle.x);
+    const dxRight = Math.abs(prevX - (obstacle.x + obstacle.w));
+    const dyTop = Math.abs(prevY - obstacle.y);
+    const dyBottom = Math.abs(prevY - (obstacle.y + obstacle.h));
+    const minSide = Math.min(dxLeft, dxRight, dyTop, dyBottom);
+    if (minSide === dxLeft || minSide === dxRight) bullet.vx *= -1;
+    else bullet.vy *= -1;
+  }
+
+  bullet.bounces += 1;
+  return true;
 }
 
 function fireBullet(room, tank) {
@@ -214,10 +271,12 @@ function updateRoom(room, dt) {
   for (const tank of room.tanks) {
     if (!tank) continue;
     if (tank.hold) {
-      tank.x += Math.cos(tank.angle) * TANK_SPEED * dt;
-      tank.y += Math.sin(tank.angle) * TANK_SPEED * dt;
-      tank.x = Math.max(TANK_RADIUS, Math.min(AREA.w - TANK_RADIUS, tank.x));
-      tank.y = Math.max(TANK_RADIUS, Math.min(AREA.h - TANK_RADIUS, tank.y));
+      const nextX = tank.x + Math.cos(tank.angle) * TANK_SPEED * dt;
+      const nextY = tank.y + Math.sin(tank.angle) * TANK_SPEED * dt;
+      if (tankCanMove(room, tank, nextX, nextY)) {
+        tank.x = nextX;
+        tank.y = nextY;
+      }
       tank.charge += dt;
       if (tank.charge >= CHARGE_TIME) {
         fireBullet(room, tank);
@@ -233,6 +292,8 @@ function updateRoom(room, dt) {
 
   const kept = [];
   for (const bullet of room.bullets) {
+    const prevX = bullet.x;
+    const prevY = bullet.y;
     bullet.x += bullet.vx * dt;
     bullet.y += bullet.vy * dt;
     let bounced = false;
@@ -256,15 +317,24 @@ function updateRoom(room, dt) {
       bounced = true;
     }
     if (bounced) bullet.bounces += 1;
+    if (!bounced) {
+      for (const obstacle of OBSTACLES) {
+        if (reflectBulletOnObstacle(bullet, prevX, prevY, obstacle)) {
+          bounced = true;
+          break;
+        }
+      }
+    }
     if (bullet.bounces >= bullet.maxBounces) continue;
 
     let hit = false;
     for (const tank of room.tanks) {
-      if (!tank || tank.slot === bullet.owner) continue;
+      if (!tank) continue;
       const dx = tank.x - bullet.x;
       const dy = tank.y - bullet.y;
       if (Math.hypot(dx, dy) <= TANK_RADIUS + BULLET_RADIUS) {
-        scorePoint(room, bullet.owner);
+        const scorerSlot = tank.slot === bullet.owner ? 1 - bullet.owner : bullet.owner;
+        scorePoint(room, scorerSlot);
         hit = true;
         break;
       }
