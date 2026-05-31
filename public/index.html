@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>タンクピクセル</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: rgba(15, 23, 42, 0.92);
+      --panel2: rgba(30, 41, 59, 0.88);
+      --line: rgba(148, 163, 184, 0.32);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --p1: #38bdf8;
+      --p2: #fb7185;
+      --accent: #facc15;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: radial-gradient(circle at top, #172554, #020617 62%); color: var(--text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { overflow-x: hidden; }
+
+    .screen { width: min(1180px, 100%); margin: 0 auto; padding: 18px; }
+    .hidden { display: none !important; }
+
+    .start-screen { min-height: 100vh; display: grid; place-items: center; }
+    .hero { width: min(820px, 100%); border: 1px solid var(--line); background: linear-gradient(180deg, rgba(15, 23, 42, .94), rgba(2, 6, 23, .94)); border-radius: 32px; box-shadow: 0 30px 90px rgba(0,0,0,.45); padding: 28px; text-align: center; }
+    .logo { margin: 0; font-size: clamp(38px, 8vw, 72px); letter-spacing: .04em; line-height: 1; font-weight: 1000; text-shadow: 0 0 30px rgba(56, 189, 248, .3); }
+    .logo span { color: var(--accent); }
+    .subtitle { color: var(--muted); line-height: 1.8; margin: 16px auto 24px; max-width: 680px; }
+    .start-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+    .card { border: 1px solid var(--line); background: var(--panel2); border-radius: 24px; padding: 18px; text-align: left; }
+    .card h2 { margin: 0 0 12px; font-size: 20px; }
+    label { display: block; font-size: 13px; color: var(--muted); font-weight: 700; margin: 12px 0 6px; }
+    input { width: 100%; border: 1px solid var(--line); border-radius: 16px; padding: 13px 14px; background: rgba(2,6,23,.88); color: var(--text); outline: none; font-size: 16px; }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(250,204,21,.15); }
+    button { border: 0; border-radius: 16px; padding: 13px 16px; font-weight: 900; color: #020617; background: var(--accent); cursor: pointer; transition: transform .12s ease, opacity .12s ease; }
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); opacity: .85; }
+    .secondary { background: #334155; color: var(--text); }
+    .danger { background: #fb7185; color: #fff; }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+    .game-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; margin-bottom: 14px; }
+    .room-pill { justify-self: start; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 10px 14px; color: var(--muted); }
+    .title { text-align: center; font-weight: 1000; font-size: 28px; letter-spacing: .08em; }
+    .status { justify-self: end; border: 1px solid var(--line); background: var(--panel); border-radius: 18px; padding: 10px 14px; color: var(--muted); max-width: 360px; }
+
+    .scoreboard { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .player-card { border: 1px solid var(--line); background: var(--panel); border-radius: 22px; padding: 14px; display: grid; gap: 8px; }
+    .player-card.mine { outline: 3px solid rgba(250,204,21,.28); }
+    .p-name { display: flex; justify-content: space-between; gap: 12px; font-weight: 1000; font-size: 18px; }
+    .score-dots { display: flex; gap: 7px; }
+    .dot { width: 22px; height: 22px; border-radius: 8px; background: rgba(148,163,184,.18); border: 1px solid rgba(148,163,184,.32); }
+    .dot.on.p1 { background: var(--p1); box-shadow: 0 0 18px rgba(56,189,248,.45); }
+    .dot.on.p2 { background: var(--p2); box-shadow: 0 0 18px rgba(251,113,133,.45); }
+    .versus { color: var(--accent); font-weight: 1000; font-size: 20px; }
+
+    .arena-wrap { position: relative; border: 1px solid var(--line); border-radius: 28px; padding: 14px; background: linear-gradient(180deg, rgba(15,23,42,.92), rgba(2,6,23,.92)); box-shadow: 0 20px 70px rgba(0,0,0,.35); }
+    canvas { width: 100%; display: block; border-radius: 18px; background: #0f172a; image-rendering: pixelated; touch-action: none; }
+    .overlay { position: absolute; inset: 14px; display: grid; place-items: center; pointer-events: none; }
+    .big-message { padding: 22px 28px; border-radius: 26px; background: rgba(2,6,23,.82); border: 1px solid rgba(250,204,21,.5); box-shadow: 0 0 60px rgba(250,204,21,.18); text-align: center; transform: scale(.98); animation: pop .35s ease; }
+    .big-message h2 { margin: 0 0 8px; font-size: clamp(30px, 6vw, 64px); }
+    .big-message p { margin: 0; color: var(--muted); }
+    @keyframes pop { from { transform: scale(.9); opacity: 0; } to { transform: scale(.98); opacity: 1; } }
+
+    .hud { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; margin-top: 14px; }
+    .gauge-card { border: 1px solid var(--line); background: var(--panel); border-radius: 20px; padding: 13px; }
+    .gauge-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 8px; font-weight: 700; }
+    .gauge { height: 18px; border-radius: 999px; background: rgba(148,163,184,.18); overflow: hidden; border: 1px solid rgba(148,163,184,.25); }
+    .gauge-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #f97316); box-shadow: 0 0 20px rgba(250,204,21,.38); transition: width .08s linear; }
+    .hold-button { min-width: min(340px, 100%); padding: 20px 24px; font-size: 18px; border-radius: 24px; background: linear-gradient(180deg, #facc15, #f97316); user-select: none; touch-action: none; }
+    .help { color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+    .rules { margin-top: 14px; border: 1px solid var(--line); background: rgba(15,23,42,.72); border-radius: 22px; padding: 14px; color: var(--muted); line-height: 1.7; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-size: 13px; }
+    .rule { background: rgba(2,6,23,.45); padding: 10px; border-radius: 16px; }
+    .rule strong { color: var(--text); display: block; }
+
+    @media (max-width: 840px) {
+      .start-grid, .rules { grid-template-columns: 1fr; }
+      .game-header, .scoreboard, .hud { grid-template-columns: 1fr; }
+      .title, .room-pill, .status { justify-self: stretch; text-align: center; }
+      .versus { text-align: center; }
+      .hold-button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <section class="start-screen screen" id="startScreen">
+    <div class="hero">
+      <h1 class="logo">TANK <span>PIXEL</span></h1>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、3秒チャージで反射弾を発射。5点先取の1対1オンライン対戦です。</p>
+      <div class="start-grid">
+        <div class="card">
+          <h2>部屋を作る</h2>
+          <label>あなたの名前</label>
+          <input id="createName" maxlength="14" placeholder="プレイヤー1" />
+          <div class="btn-row"><button id="createBtn">部屋を作る</button></div>
+        </div>
+        <div class="card">
+          <h2>部屋に入る</h2>
+          <label>あなたの名前</label>
+          <input id="joinName" maxlength="14" placeholder="プレイヤー2" />
+          <label>部屋ID</label>
+          <input id="roomCodeInput" maxlength="8" placeholder="ABCDE" />
+          <div class="btn-row"><button id="joinBtn">入室する</button></div>
+        </div>
+      </div>
+      <div class="btn-row" style="justify-content:center"><button class="secondary" id="reconnectBtn">前回の部屋に再接続</button></div>
+      <p id="startError" class="subtitle" style="color:#fb7185"></p>
+    </div>
+  </section>
+
+  <main class="screen hidden" id="gameScreen">
+    <div class="game-header">
+      <div class="room-pill">部屋ID：<strong id="roomCode">-----</strong> <button class="secondary" id="copyBtn" style="padding:8px 10px;margin-left:8px">コピー</button></div>
+      <div class="title">TANK PIXEL</div>
+      <div class="status" id="statusText">接続中...</div>
+    </div>
+
+    <section class="scoreboard">
+      <div class="player-card" id="p0Card"><div class="p-name"><span id="p0Name">P1</span><span id="p0Conn">-</span></div><div class="score-dots" id="p0Score"></div></div>
+      <div class="versus">VS</div>
+      <div class="player-card" id="p1Card"><div class="p-name"><span id="p1Name">P2</span><span id="p1Conn">-</span></div><div class="score-dots" id="p1Score"></div></div>
+    </section>
+
+    <section class="arena-wrap">
+      <canvas id="gameCanvas" width="960" height="540"></canvas>
+      <div class="overlay hidden" id="overlay"><div class="big-message"><h2 id="overlayTitle"></h2><p id="overlayText"></p></div></div>
+    </section>
+
+    <section class="hud">
+      <div class="gauge-card">
+        <div class="gauge-label"><span>チャージ</span><span id="chargeText">0.0 / 3.0 秒</span></div>
+        <div class="gauge"><div class="gauge-fill" id="chargeFill"></div></div>
+      </div>
+      <button class="hold-button" id="holdBtn">長押しで前進・チャージ</button>
+      <div class="help">
+        PC：スペースキー長押し / マウス長押し<br>
+        スマホ：ボタン長押し。離すと停止してゲージリセット。
+      </div>
+    </section>
+
+    <section class="rules">
+      <div class="rule"><strong>回転</strong>何も押していない間、戦車は自動回転します。</div>
+      <div class="rule"><strong>前進</strong>長押し中だけ回転が止まり、その方向へ進みます。</div>
+      <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、3秒で弾を発射します。</div>
+      <div class="rule"><strong>反射</strong>弾は壁で反射し、5回反射すると消えます。</div>
+      <div class="rule"><strong>勝利</strong>相手に当てると1点。5点先取で勝利です。</div>
+    </section>
+
+    <div class="btn-row" style="justify-content:center; margin-top:14px">
+      <button class="secondary" id="restartBtn">もう一度</button>
+      <button class="danger" id="clearBtn">再接続情報を消す</button>
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
+    const $ = (id) => document.getElementById(id);
+
+    const canvas = $('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let state = null;
+    let mySlot = null;
+    let token = localStorage.getItem('tankPixelToken') || '';
+    let savedCode = localStorage.getItem('tankPixelRoom') || '';
+    let hold = false;
+    let lastTurnMine = false;
+
+    function showGame() {
+      $('startScreen').classList.add('hidden');
+      $('gameScreen').classList.remove('hidden');
+    }
+    function showStartError(text) { $('startError').textContent = text; }
+
+    $('createBtn').onclick = () => {
+      showStartError('');
+      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1' });
+    };
+    $('joinBtn').onclick = () => {
+      showStartError('');
+      socket.emit('joinRoom', { code: $('roomCodeInput').value.trim(), name: $('joinName').value.trim() || 'プレイヤー2', token: '' });
+    };
+    $('reconnectBtn').onclick = () => {
+      if (!savedCode || !token) return showStartError('再接続情報がありません。');
+      socket.emit('joinRoom', { code: savedCode, name: '', token });
+    };
+    $('copyBtn').onclick = async () => {
+      try { await navigator.clipboard.writeText(state?.code || ''); $('statusText').textContent = '部屋IDをコピーしました。'; } catch {}
+    };
+    $('restartBtn').onclick = () => socket.emit('restart');
+    $('clearBtn').onclick = () => {
+      localStorage.removeItem('tankPixelToken');
+      localStorage.removeItem('tankPixelRoom');
+      location.reload();
+    };
+
+    socket.on('joined', ({ code, slot, token: nextToken }) => {
+      mySlot = slot;
+      token = nextToken;
+      savedCode = code;
+      localStorage.setItem('tankPixelToken', token);
+      localStorage.setItem('tankPixelRoom', code);
+      showGame();
+    });
+    socket.on('errorMessage', showStartError);
+    socket.on('state', (next) => {
+      const wasFinished = state?.status === 'finished';
+      state = next;
+      renderUI();
+      if (!wasFinished && state.status === 'finished') showOverlay('WINNER', `${state.tanks[state.winnerSlot]?.name || '勝者'} の勝利！`);
+      else if (state.status !== 'finished') hideOverlay();
+    });
+
+    function setHold(next) {
+      if (hold === next) return;
+      hold = next;
+      socket.emit('setHold', { hold });
+    }
+    const holdBtn = $('holdBtn');
+    ['mousedown','touchstart','pointerdown'].forEach(ev => holdBtn.addEventListener(ev, (e) => { e.preventDefault(); setHold(true); }));
+    ['mouseup','mouseleave','touchend','touchcancel','pointerup','pointercancel'].forEach(ev => holdBtn.addEventListener(ev, (e) => { e.preventDefault(); setHold(false); }));
+    canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); setHold(true); });
+    window.addEventListener('pointerup', () => setHold(false));
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space') { e.preventDefault(); setHold(true); } });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space') { e.preventDefault(); setHold(false); } });
+    window.addEventListener('blur', () => setHold(false));
+
+    function renderUI() {
+      if (!state) return;
+      $('roomCode').textContent = state.code;
+      $('statusText').textContent = state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中');
+      for (let i = 0; i < 2; i++) {
+        const tank = state.tanks[i];
+        $(`p${i}Card`).classList.toggle('mine', i === mySlot);
+        $(`p${i}Name`).textContent = tank?.name || `P${i+1}`;
+        $(`p${i}Conn`).textContent = tank?.connected ? 'ONLINE' : 'OFFLINE';
+        $(`p${i}Conn`).style.color = tank?.connected ? '#86efac' : '#fca5a5';
+        $(`p${i}Score`).innerHTML = Array.from({ length: state.winScore }, (_, n) => `<span class="dot ${n < (tank?.score || 0) ? 'on p'+(i+1) : ''}"></span>`).join('');
+      }
+      const mine = state.tanks[mySlot];
+      const charge = mine?.charge || 0;
+      $('chargeText').textContent = `${charge.toFixed(1)} / 3.0 秒`;
+      $('chargeFill').style.width = `${Math.min(100, charge / 3 * 100)}%`;
+    }
+
+    function showOverlay(title, text) {
+      $('overlayTitle').textContent = title;
+      $('overlayText').textContent = text;
+      $('overlay').classList.remove('hidden');
+    }
+    function hideOverlay() { $('overlay').classList.add('hidden'); }
+
+    function draw() {
+      requestAnimationFrame(draw);
+      if (!state) {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        return;
+      }
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      drawArena();
+      drawBullets();
+      drawTanks();
+      drawCountdown();
+    }
+
+    function drawArena() {
+      const w = canvas.width, h = canvas.height;
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0,0,w,h);
+      ctx.strokeStyle = 'rgba(148,163,184,.14)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= w; x += 32) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+      for (let y = 0; y <= h; y += 32) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 5;
+      ctx.strokeRect(2.5,2.5,w-5,h-5);
+      ctx.strokeStyle = 'rgba(250,204,21,.22)';
+      ctx.lineWidth = 14;
+      ctx.strokeRect(7,7,w-14,h-14);
+    }
+
+    function drawTanks() {
+      (state.tanks || []).forEach((tank) => {
+        if (!tank) return;
+        ctx.save();
+        ctx.translate(tank.x, tank.y);
+        ctx.rotate(tank.angle);
+        ctx.shadowColor = tank.color;
+        ctx.shadowBlur = tank.slot === mySlot ? 20 : 10;
+        ctx.fillStyle = tank.color;
+        ctx.strokeStyle = '#020617';
+        ctx.lineWidth = 4;
+        roundRect(-22, -15, 38, 30, 6, true, true);
+        ctx.fillStyle = '#e5e7eb';
+        roundRect(0, -5, 26, 10, 4, true, true);
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(-16, -20, 28, 5);
+        ctx.fillRect(-16, 15, 28, 5);
+        ctx.restore();
+        ctx.fillStyle = tank.color;
+        ctx.font = 'bold 14px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText(tank.name, tank.x, tank.y - 30);
+        if (!tank.connected) {
+          ctx.fillStyle = 'rgba(2,6,23,.7)';
+          ctx.beginPath(); ctx.arc(tank.x, tank.y, 24, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = '#fca5a5'; ctx.fillText('OFF', tank.x, tank.y + 5);
+        }
+      });
+    }
+
+    function drawBullets() {
+      (state.bullets || []).forEach((b) => {
+        const owner = state.tanks[b.owner];
+        ctx.save();
+        ctx.shadowColor = owner?.color || '#fff';
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = '#f8fafc';
+        ctx.beginPath(); ctx.arc(b.x,b.y,6,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = owner?.color || '#fff';
+        ctx.lineWidth = 3; ctx.stroke();
+        ctx.restore();
+      });
+    }
+
+    function drawCountdown() {
+      if (!state.roundResetUntil) return;
+      const remain = Math.max(0, state.roundResetUntil - Date.now());
+      if (remain <= 0) return;
+      ctx.fillStyle = 'rgba(2,6,23,.55)';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = '#facc15';
+      ctx.font = '900 52px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('RESET', canvas.width/2, canvas.height/2);
+    }
+
+    function roundRect(x, y, w, h, r, fill, stroke) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+
+    draw();
+  </script>
+</body>
+</html>

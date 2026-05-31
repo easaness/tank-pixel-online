@@ -1,0 +1,17 @@
+{
+  "name": "tank-pixel-online",
+  "version": "1.0.0",
+  "description": "1v1 online rotating tank duel game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@socket.io/admin-ui": "^0.5.1",
+    "express": "^4.18.3",
+    "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
