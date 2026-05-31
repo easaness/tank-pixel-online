@@ -36,7 +36,7 @@ const BUMP_COOLDOWN = 0.12;
 const ITEM_RADIUS = 14;
 const ITEM_MAX_COUNT = 3;
 const ITEM_SPAWN_INTERVAL_MS = 5000;
-const ITEM_EFFECT_TYPES = ['speed', 'fastCharge', 'enemyGiant', 'invisible', 'bigBullet', 'fastBullet'];
+const ITEM_EFFECT_TYPES = ['speed', 'fastCharge', 'enemyGiant', 'invisible', 'bigBullet', 'fastBullet', 'fastRotate'];
 const ITEM_TYPES = [...ITEM_EFFECT_TYPES, 'random'];
 const ITEM_LABELS = {
   speed: '加速',
@@ -45,6 +45,7 @@ const ITEM_LABELS = {
   invisible: '透明化',
   bigBullet: '大きい弾',
   fastBullet: '弾速度上昇',
+  fastRotate: '回転速度上昇',
   random: '？',
 };
 const ITEM_ICONS = {
@@ -54,9 +55,11 @@ const ITEM_ICONS = {
   invisible: '◌',
   bigBullet: '●',
   fastBullet: '➤',
+  fastRotate: '↻',
   random: '?',
 };
 const EFFECT_DURATION_MS = 7000;
+const FAST_ROTATE_MULTIPLIER = 1.65;
 
 function extendTimedEffect(currentUntil, now = Date.now()) {
   return Math.max(currentUntil || 0, now) + EFFECT_DURATION_MS;
@@ -272,6 +275,7 @@ function activeEffectsForPublic(tank, now = Date.now()) {
   add('invisible', '透明', tank.invisibleUntil);
   add('bigBullet', '大弾', tank.bigBulletUntil);
   add('fastBullet', '速弾', tank.fastBulletUntil);
+  add('fastRotate', '回転', tank.fastRotateUntil);
   return effects;
 }
 
@@ -300,6 +304,9 @@ function applyItemEffect(room, tank, item) {
   } else if (type === 'fastBullet') {
     tank.fastBulletUntil = extendTimedEffect(tank.fastBulletUntil, now);
     room.message = `${tank.name} が${prefix}弾速度上昇！`;
+  } else if (type === 'fastRotate') {
+    tank.fastRotateUntil = extendTimedEffect(tank.fastRotateUntil, now);
+    room.message = `${tank.name} が${prefix}回転速度上昇！`;
   }
   tank.lastItem = ITEM_LABELS[type] || 'アイテム';
 }
@@ -358,6 +365,7 @@ function cloneRoomForSave(room) {
       invisibleUntil: tank.invisibleUntil || 0,
       bigBulletUntil: tank.bigBulletUntil || 0,
       fastBulletUntil: tank.fastBulletUntil || 0,
+      fastRotateUntil: tank.fastRotateUntil || 0,
       lastItem: tank.lastItem || '',
       alive: tank.alive !== false,
       color: tank.color,
@@ -410,6 +418,7 @@ function loadRoomsFromDisk() {
         alive: tank.alive !== false,
         speedUntil: tank.speedUntil || 0,
         fastChargeUntil: tank.fastChargeUntil || 0,
+        fastRotateUntil: tank.fastRotateUntil || 0,
         shield: false,
         giantUntil: tank.giantUntil || 0,
         invisibleUntil: tank.invisibleUntil || 0,
@@ -460,6 +469,7 @@ function makeTank(slot, name, socketId, token) {
     invisibleUntil: 0,
     bigBulletUntil: 0,
     fastBulletUntil: 0,
+    fastRotateUntil: 0,
     lastItem: '',
     color: PLAYER_COLORS[slot] || '#facc15',
     alive: true,
@@ -482,6 +492,7 @@ function resetPositions(room) {
     tank.invisibleUntil = 0;
     tank.bigBulletUntil = 0;
     tank.fastBulletUntil = 0;
+    tank.fastRotateUntil = 0;
     tank.lastItem = '';
     tank.alive = true;
   });
@@ -892,7 +903,8 @@ function updateRoom(room, dt) {
         room.message = `${tank.name} が発射！`;
       }
     } else {
-      tank.angle += ROTATE_SPEED * dt;
+      const rotateMultiplier = (tank.fastRotateUntil || 0) > Date.now() ? FAST_ROTATE_MULTIPLIER : 1;
+      tank.angle += ROTATE_SPEED * rotateMultiplier * dt;
       if (tank.angle > Math.PI * 2) tank.angle -= Math.PI * 2;
       tank.charge = 0;
     }
