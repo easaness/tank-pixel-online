@@ -24,11 +24,100 @@ const BROADCAST_HZ = 30;
 const OBSTACLE_HALF_WIDTH = 7;
 const BUMP_BACK_DISTANCE = 10;
 const BUMP_COOLDOWN = 0.12;
-const OBSTACLES = [
-  { id: 'centerLine', x1: 480, y1: 170, x2: 480, y2: 370 },
-  { id: 'leftLine', x1: 210, y1: 150, x2: 360, y2: 150 },
-  { id: 'rightLine', x1: 600, y1: 390, x2: 750, y2: 390 },
+const SPAWNS = [
+  { x: 160, y: AREA.h / 2 },
+  { x: AREA.w - 160, y: AREA.h / 2 },
 ];
+
+function randomBetween(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function pointLineDistance(px, py, line) {
+  return distancePointToSegment(px, py, line.x1, line.y1, line.x2, line.y2).distance;
+}
+
+function lineLength(line) {
+  return Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+}
+
+function isObstacleSafe(line, existing) {
+  if (lineLength(line) < 90) return false;
+
+  // 初期位置とその周辺は必ず空ける
+  for (const spawn of SPAWNS) {
+    if (pointLineDistance(spawn.x, spawn.y, line) < 95) return false;
+  }
+
+  // 外周に近すぎる線は避ける
+  const margin = 55;
+  for (const [x, y] of [[line.x1, line.y1], [line.x2, line.y2]]) {
+    if (x < margin || x > AREA.w - margin || y < margin || y > AREA.h - margin) return false;
+  }
+
+  // 線同士が密集しすぎると詰まりやすいので少し離す
+  for (const other of existing) {
+    const checks = [
+      [line.x1, line.y1], [line.x2, line.y2],
+      [other.x1, other.y1], [other.x2, other.y2],
+    ];
+    if (pointLineDistance(checks[0][0], checks[0][1], other) < 42) return false;
+    if (pointLineDistance(checks[1][0], checks[1][1], other) < 42) return false;
+    if (pointLineDistance(checks[2][0], checks[2][1], line) < 42) return false;
+    if (pointLineDistance(checks[3][0], checks[3][1], line) < 42) return false;
+  }
+
+  return true;
+}
+
+function makeRandomLine(id) {
+  const type = Math.floor(Math.random() * 3);
+  const cx = randomBetween(230, AREA.w - 230);
+  const cy = randomBetween(105, AREA.h - 105);
+  const length = randomBetween(115, 190);
+  let angle;
+
+  if (type === 0) angle = 0; // 横
+  else if (type === 1) angle = Math.PI / 2; // 縦
+  else angle = Math.random() < 0.5 ? Math.PI / 4 : -Math.PI / 4; // 斜め
+
+  const dx = Math.cos(angle) * length / 2;
+  const dy = Math.sin(angle) * length / 2;
+  return {
+    id: `line${id}`,
+    x1: Math.round(cx - dx),
+    y1: Math.round(cy - dy),
+    x2: Math.round(cx + dx),
+    y2: Math.round(cy + dy),
+  };
+}
+
+function generateObstacles() {
+  const obstacles = [];
+  const targetCount = 4;
+  let attempts = 0;
+
+  while (obstacles.length < targetCount && attempts < 250) {
+    attempts += 1;
+    const line = makeRandomLine(obstacles.length + 1);
+    if (isObstacleSafe(line, obstacles)) obstacles.push(line);
+  }
+
+  // まれに生成が足りなかった場合の安全な固定候補
+  const fallbacks = [
+    { id: 'fallback1', x1: 430, y1: 145, x2: 530, y2: 245 },
+    { id: 'fallback2', x1: 430, y1: 395, x2: 530, y2: 295 },
+    { id: 'fallback3', x1: 320, y1: 120, x2: 320, y2: 220 },
+    { id: 'fallback4', x1: 640, y1: 320, x2: 640, y2: 430 },
+  ];
+
+  for (const line of fallbacks) {
+    if (obstacles.length >= targetCount) break;
+    if (isObstacleSafe(line, obstacles)) obstacles.push(line);
+  }
+
+  return obstacles;
+}
 
 const rooms = new Map();
 
@@ -49,8 +138,8 @@ function makeTank(slot, name, socketId, token) {
     socketId,
     token,
     connected: true,
-    x: left ? 160 : AREA.w - 160,
-    y: AREA.h / 2,
+    x: SPAWNS[slot].x,
+    y: SPAWNS[slot].y,
     angle: left ? 0 : Math.PI,
     hold: false,
     charge: 0,
@@ -63,9 +152,8 @@ function makeTank(slot, name, socketId, token) {
 function resetPositions(room) {
   room.tanks.forEach((tank) => {
     if (!tank) return;
-    const left = tank.slot === 0;
-    tank.x = left ? 160 : AREA.w - 160;
-    tank.y = AREA.h / 2;
+    tank.x = SPAWNS[tank.slot].x;
+    tank.y = SPAWNS[tank.slot].y;
     tank.angle = left ? 0 : Math.PI;
     tank.hold = false;
     tank.charge = 0;
@@ -83,7 +171,7 @@ function publicState(room) {
     winnerSlot: room.winnerSlot,
     winScore: WIN_SCORE,
     chargeTime: CHARGE_TIME,
-    obstacles: OBSTACLES,
+    obstacles: room.obstacles || [],
     tanks: room.tanks.map((t) => t && ({
       slot: t.slot,
       name: t.name,
@@ -114,6 +202,7 @@ function createRoom(hostName, socket) {
     message: '相手の参加を待っています。',
     lastTick: Date.now(),
     roundResetUntil: 0,
+    obstacles: generateObstacles(),
   };
   rooms.set(code, room);
   socket.join(code);
@@ -168,11 +257,12 @@ function joinRoom(code, name, socket, token) {
 function startMatch(room) {
   room.status = 'playing';
   room.winnerSlot = null;
+  room.obstacles = generateObstacles();
   room.tanks.forEach((tank) => {
     if (tank) tank.score = 0;
   });
   resetPositions(room);
-  room.message = 'ゲーム開始！長押しで前進、2秒チャージで弾を発射します。';
+  room.message = 'ゲーム開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。';
 }
 
 function cryptoToken() {
@@ -203,7 +293,7 @@ function tankCanMove(room, tank, nextX, nextY) {
   if (nextX < TANK_RADIUS || nextX > AREA.w - TANK_RADIUS) return false;
   if (nextY < TANK_RADIUS || nextY > AREA.h - TANK_RADIUS) return false;
 
-  for (const obstacle of OBSTACLES) {
+  for (const obstacle of (room.obstacles || [])) {
     if (circleLineHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
   }
 
@@ -373,7 +463,7 @@ function updateRoom(room, dt) {
     }
     if (bounced) bullet.bounces += 1;
     if (!bounced) {
-      for (const obstacle of OBSTACLES) {
+      for (const obstacle of (room.obstacles || [])) {
         if (reflectBulletOnObstacle(bullet, prevX, prevY, obstacle)) {
           bounced = true;
           break;
@@ -414,7 +504,8 @@ io.on('connection', (socket) => {
   socket.on('restart', () => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
-    if (socket.data.slot !== 0) return;
+    if (![0, 1].includes(socket.data.slot)) return;
+    if (room.status !== 'finished' && socket.data.slot !== 0) return;
     if (!room.tanks[0] || !room.tanks[1]) {
       room.status = 'waiting';
       room.message = '相手の参加を待っています。';
