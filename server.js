@@ -21,6 +21,16 @@ const ROOM_TTL_MS = 1000 * 60 * 60 * 6; // 全員が退出しても6時間は部
 const AREA = { w: 960, h: 540 };
 const TANK_RADIUS = 18;
 const TANK_SPEED = 150;
+const SPEED_BOOST_MULTIPLIER = 1.45;
+const SPEED_BOOST_MS = 8000;
+const CHARGE_BOOST_TIME = 1.15;
+const CHARGE_BOOST_MS = 8000;
+const SIZE_UP_MULTIPLIER = 1.45;
+const SIZE_UP_MS = 8000;
+const ITEM_RADIUS = 13;
+const ITEM_PICKUP_RADIUS = 30;
+const ITEM_MAX_COUNT = 3;
+const ITEM_RESPAWN_MS = 4500;
 const ROTATE_SPEED = Math.PI * 0.72;
 const BULLET_SPEED = 360;
 const BULLET_RADIUS = 6;
@@ -140,6 +150,9 @@ function cloneRoomForSave(room) {
     code: room.code,
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
+    mode: room.mode || 'standard',
+    items: room.items || [],
+    lastItemSpawnAt: room.lastItemSpawnAt || 0,
     bullets: room.bullets || [],
     winnerSlot: room.winnerSlot ?? null,
     winnerSlots: room.winnerSlots || [],
@@ -162,6 +175,9 @@ function cloneRoomForSave(room) {
       bumpCooldown: tank.bumpCooldown || 0,
       score: tank.score || 0,
       color: tank.color,
+      speedBoostUntil: tank.speedBoostUntil || 0,
+      chargeBoostUntil: tank.chargeBoostUntil || 0,
+      sizeUpUntil: tank.sizeUpUntil || 0,
     })),
   };
 }
@@ -201,6 +217,9 @@ function loadRoomsFromDisk() {
     for (const rawRoom of parsed.rooms || []) {
       if (!rawRoom || !rawRoom.code) continue;
       if (now - (rawRoom.lastTouched || parsed.savedAt || now) > ROOM_TTL_MS) continue;
+      rawRoom.mode = rawRoom.mode || 'standard';
+      rawRoom.items = rawRoom.items || [];
+      rawRoom.lastItemSpawnAt = rawRoom.lastItemSpawnAt || 0;
       rawRoom.tanks = (rawRoom.tanks || []).map((tank) => tank && ({
         ...tank,
         socketId: '',
@@ -246,6 +265,9 @@ function makeTank(slot, name, socketId, token) {
     bumpCooldown: 0,
     score: 0,
     color: PLAYER_COLORS[slot] || '#facc15',
+    speedBoostUntil: 0,
+    chargeBoostUntil: 0,
+    sizeUpUntil: 0,
   };
 }
 
@@ -258,6 +280,9 @@ function resetPositions(room) {
     tank.hold = false;
     tank.charge = 0;
     tank.bumpCooldown = 0;
+    tank.speedBoostUntil = 0;
+    tank.chargeBoostUntil = 0;
+    tank.sizeUpUntil = 0;
   });
   room.bullets = [];
   room.roundResetUntil = Date.now() + 700;
@@ -269,10 +294,13 @@ function publicState(room) {
     area: AREA,
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
+    mode: room.mode || 'standard',
     winnerSlot: room.winnerSlot,
     winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
     chargeTime: CHARGE_TIME,
+    chargeBoostTime: CHARGE_BOOST_TIME,
+    items: room.items || [],
     obstacles: room.obstacles || [],
     tanks: room.tanks.map((t) => t && ({
       slot: t.slot,
@@ -285,6 +313,10 @@ function publicState(room) {
       charge: t.charge,
       score: t.score,
       color: t.color,
+      speedBoostUntil: t.speedBoostUntil || 0,
+      chargeBoostUntil: t.chargeBoostUntil || 0,
+      sizeUpUntil: t.sizeUpUntil || 0,
+      radius: getTankRadius(t),
     })),
     bullets: room.bullets,
     roundResetUntil: room.roundResetUntil,
@@ -298,16 +330,18 @@ function normalizePlayerCount(value) {
   return count;
 }
 
-function createRoom(hostName, socket, playerCount = 2) {
+function createRoom(hostName, socket, playerCount = 2, mode = 'standard') {
   const code = roomCode();
   const token = cryptoToken();
   const maxPlayers = normalizePlayerCount(playerCount);
+  const gameMode = mode === 'extra' ? 'extra' : 'standard';
   const tanks = Array.from({ length: maxPlayers }, () => null);
   tanks[0] = makeTank(0, hostName, socket.id, token);
   const room = {
     code,
     status: 'waiting',
     maxPlayers,
+    mode: gameMode,
     tanks,
     bullets: [],
     winnerSlot: null,
@@ -316,6 +350,8 @@ function createRoom(hostName, socket, playerCount = 2) {
     lastTick: Date.now(),
     roundResetUntil: 0,
     obstacles: generateObstacles(),
+    items: [],
+    lastItemSpawnAt: 0,
   };
   rooms.set(code, room);
   touchRoom(room);
@@ -381,11 +417,13 @@ function startMatch(room) {
   room.winnerSlot = null;
   room.winnerSlots = [];
   room.obstacles = generateObstacles();
+  room.items = room.mode === 'extra' ? generateInitialItems(room) : [];
+  room.lastItemSpawnAt = Date.now();
   room.tanks.forEach((tank) => {
     if (tank) tank.score = 0;
   });
   resetPositions(room);
-  room.message = `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
+  room.message = `${room.maxPlayers}人対戦開始！${room.mode === 'extra' ? 'エクストラモード：アイテムあり。' : '標準モード。'} 長押しで前進、2秒チャージで弾を発射します。`;
   touchRoom(room);
 }
 
@@ -413,17 +451,30 @@ function circleLineHit(cx, cy, radius, line) {
 }
 
 
+function getTankRadius(tank) {
+  return TANK_RADIUS * ((tank && tank.sizeUpUntil && tank.sizeUpUntil > Date.now()) ? SIZE_UP_MULTIPLIER : 1);
+}
+
+function getTankChargeTime(tank) {
+  return (tank && tank.chargeBoostUntil && tank.chargeBoostUntil > Date.now()) ? CHARGE_BOOST_TIME : CHARGE_TIME;
+}
+
+function getTankSpeed(tank) {
+  return TANK_SPEED * ((tank && tank.speedBoostUntil && tank.speedBoostUntil > Date.now()) ? SPEED_BOOST_MULTIPLIER : 1);
+}
+
 function tankCanMove(room, tank, nextX, nextY) {
-  if (nextX < TANK_RADIUS || nextX > AREA.w - TANK_RADIUS) return false;
-  if (nextY < TANK_RADIUS || nextY > AREA.h - TANK_RADIUS) return false;
+  const radius = getTankRadius(tank);
+  if (nextX < radius || nextX > AREA.w - radius) return false;
+  if (nextY < radius || nextY > AREA.h - radius) return false;
 
   for (const obstacle of (room.obstacles || [])) {
-    if (circleLineHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
+    if (circleLineHit(nextX, nextY, radius, obstacle)) return false;
   }
 
   for (const other of room.tanks) {
     if (!other || other.slot === tank.slot) continue;
-    if (Math.hypot(nextX - other.x, nextY - other.y) < TANK_RADIUS * 2) return false;
+    if (Math.hypot(nextX - other.x, nextY - other.y) < radius + getTankRadius(other)) return false;
   }
 
   return true;
@@ -487,6 +538,101 @@ function reflectBulletOnObstacle(bullet, prevX, prevY, line) {
 }
 
 
+
+const ITEM_TYPES = [
+  { type: 'speed', label: '速度UP', color: '#38bdf8' },
+  { type: 'charge', label: 'チャージ短縮', color: '#facc15' },
+  { type: 'size', label: '敵巨大化', color: '#fb7185' },
+];
+
+function isPointSafeForItem(room, x, y) {
+  const margin = 48;
+  if (x < margin || x > AREA.w - margin || y < margin || y > AREA.h - margin) return false;
+  for (const spawn of SPAWNS) {
+    if (Math.hypot(x - spawn.x, y - spawn.y) < SPAWN_SAFE_RADIUS - 20) return false;
+  }
+  for (const obstacle of (room.obstacles || [])) {
+    if (pointLineDistance(x, y, obstacle) < 42) return false;
+  }
+  for (const tank of (room.tanks || [])) {
+    if (tank && Math.hypot(x - tank.x, y - tank.y) < 80) return false;
+  }
+  for (const item of (room.items || [])) {
+    if (Math.hypot(x - item.x, y - item.y) < 90) return false;
+  }
+  return true;
+}
+
+function makeItem(room) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const x = Math.round(randomBetween(90, AREA.w - 90));
+    const y = Math.round(randomBetween(70, AREA.h - 70));
+    if (!isPointSafeForItem(room, x, y)) continue;
+    const template = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
+    return {
+      id: cryptoToken(),
+      type: template.type,
+      label: template.label,
+      color: template.color,
+      x,
+      y,
+      bornAt: Date.now(),
+    };
+  }
+  return null;
+}
+
+function generateInitialItems(room) {
+  const items = [];
+  const tempRoom = { ...room, items };
+  while (items.length < ITEM_MAX_COUNT) {
+    const item = makeItem(tempRoom);
+    if (!item) break;
+    items.push(item);
+  }
+  return items;
+}
+
+function spawnItemsIfNeeded(room) {
+  if (room.mode !== 'extra') return;
+  room.items = room.items || [];
+  const now = Date.now();
+  if (room.items.length >= ITEM_MAX_COUNT) return;
+  if (now - (room.lastItemSpawnAt || 0) < ITEM_RESPAWN_MS) return;
+  const item = makeItem(room);
+  if (item) room.items.push(item);
+  room.lastItemSpawnAt = now;
+}
+
+function applyItem(room, tank, item) {
+  const now = Date.now();
+  if (item.type === 'speed') {
+    tank.speedBoostUntil = now + SPEED_BOOST_MS;
+    room.message = `${tank.name} が速度UPを取得！`;
+  } else if (item.type === 'charge') {
+    tank.chargeBoostUntil = now + CHARGE_BOOST_MS;
+    room.message = `${tank.name} がチャージ短縮を取得！`;
+  } else if (item.type === 'size') {
+    room.tanks.forEach((other) => {
+      if (other && other.slot !== tank.slot) other.sizeUpUntil = now + SIZE_UP_MS;
+    });
+    room.message = `${tank.name} が敵巨大化を取得！`;
+  }
+}
+
+function handleItemPickups(room, tank) {
+  if (room.mode !== 'extra' || !room.items || !room.items.length) return;
+  const kept = [];
+  for (const item of room.items) {
+    if (Math.hypot(tank.x - item.x, tank.y - item.y) <= ITEM_PICKUP_RADIUS) {
+      applyItem(room, tank, item);
+    } else {
+      kept.push(item);
+    }
+  }
+  room.items = kept;
+}
+
 function fireBullet(room, tank) {
   const muzzle = TANK_RADIUS + 10;
   room.bullets.push({
@@ -536,6 +682,7 @@ function scorePoint(room, scorerSlots) {
 function updateRoom(room, dt) {
   if (room.status !== 'playing') return;
   if (room.tanks.filter(Boolean).length < (room.maxPlayers || 2)) return;
+  spawnItemsIfNeeded(room);
   if (Date.now() < room.roundResetUntil) return;
 
   for (const tank of room.tanks) {
@@ -543,13 +690,15 @@ function updateRoom(room, dt) {
     tank.bumpCooldown = Math.max(0, (tank.bumpCooldown || 0) - dt);
 
     if (tank.hold) {
-      const nextX = tank.x + Math.cos(tank.angle) * TANK_SPEED * dt;
-      const nextY = tank.y + Math.sin(tank.angle) * TANK_SPEED * dt;
+      const speed = getTankSpeed(tank);
+      const nextX = tank.x + Math.cos(tank.angle) * speed * dt;
+      const nextY = tank.y + Math.sin(tank.angle) * speed * dt;
       const canMove = tankCanMove(room, tank, nextX, nextY);
 
       if (canMove) {
         tank.x = nextX;
         tank.y = nextY;
+        handleItemPickups(room, tank);
         tank.charge += dt;
       } else {
         bumpTankBack(room, tank);
@@ -558,7 +707,7 @@ function updateRoom(room, dt) {
         tank.charge += dt;
       }
 
-      if (tank.charge >= CHARGE_TIME) {
+      if (tank.charge >= getTankChargeTime(tank)) {
         fireBullet(room, tank);
         tank.charge = 0;
         room.message = `${tank.name} が発射！`;
@@ -612,7 +761,7 @@ function updateRoom(room, dt) {
       if (!tank) continue;
       const dx = tank.x - bullet.x;
       const dy = tank.y - bullet.y;
-      if (Math.hypot(dx, dy) <= TANK_RADIUS + BULLET_RADIUS) {
+      if (Math.hypot(dx, dy) <= getTankRadius(tank) + BULLET_RADIUS) {
         const scorerSlots = tank.slot === bullet.owner
           ? room.tanks.filter((other) => other && other.slot !== bullet.owner).map((other) => other.slot)
           : [bullet.owner];
@@ -626,7 +775,7 @@ function updateRoom(room, dt) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, playerCount }) => createRoom(name, socket, playerCount));
+  socket.on('createRoom', ({ name, playerCount, mode }) => createRoom(name, socket, playerCount, mode));
   socket.on('joinRoom', ({ code, name, token }) => joinRoom(code, name, socket, token));
 
   socket.on('setHold', ({ hold }) => {
