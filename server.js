@@ -25,6 +25,7 @@ const ROTATE_SPEED = Math.PI * 0.72;
 const BULLET_SPEED = 360;
 const BULLET_RADIUS = 6;
 const CHARGE_TIME = 2;
+const FAST_CHARGE_TIME = CHARGE_TIME / 1.65; // チャージ短縮中は前の倍率相当で約1.2秒
 const WIN_SCORE = 5;
 const BROADCAST_HZ = 30;
 const OBSTACLE_HALF_WIDTH = 7;
@@ -59,6 +60,10 @@ const EFFECT_DURATION_MS = 7000;
 
 function extendTimedEffect(currentUntil, now = Date.now()) {
   return Math.max(currentUntil || 0, now) + EFFECT_DURATION_MS;
+}
+
+function effectiveChargeTime(tank, now = Date.now()) {
+  return (tank && (tank.fastChargeUntil || 0) > now) ? FAST_CHARGE_TIME : CHARGE_TIME;
 }
 const SPAWNS = [
   { x: 150, y: AREA.h / 2, angle: 0 },
@@ -495,7 +500,7 @@ function publicState(room, viewerSlot = null) {
     winnerSlot: room.winnerSlot,
     winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
-    chargeTime: CHARGE_TIME,
+    chargeTime: effectiveChargeTime(room.tanks[viewerSlot], now),
     obstacles: room.obstacles || [],
     items: (room.items || []).map(itemPublicState),
     tanks: room.tanks.map((t) => {
@@ -863,7 +868,7 @@ function updateRoom(room, dt) {
     if (tank.hold) {
       const nowMs = Date.now();
       const speedMultiplier = (tank.speedUntil || 0) > nowMs ? 1.45 : 1;
-      const chargeMultiplier = (tank.fastChargeUntil || 0) > nowMs ? 1.65 : 1;
+      const chargeTime = effectiveChargeTime(tank, nowMs);
       const nextX = tank.x + Math.cos(tank.angle) * TANK_SPEED * speedMultiplier * dt;
       const nextY = tank.y + Math.sin(tank.angle) * TANK_SPEED * speedMultiplier * dt;
       const canMove = tankCanMove(room, tank, nextX, nextY);
@@ -871,17 +876,17 @@ function updateRoom(room, dt) {
       if (canMove) {
         tank.x = nextX;
         tank.y = nextY;
-        tank.charge += dt * chargeMultiplier;
+        tank.charge += dt;
       } else {
         bumpTankBack(room, tank);
         // 長押し中は、壁や敵にぶつかって押し戻されてもチャージを維持します。
         // チャージはボタンを離したとき、発射したとき、得点リセット時だけリセットします。
-        tank.charge += dt * chargeMultiplier;
+        tank.charge += dt;
       }
 
       checkItemPickup(room, tank);
 
-      if (tank.charge >= CHARGE_TIME) {
+      if (tank.charge >= chargeTime) {
         fireBullet(room, tank);
         tank.charge = 0;
         room.message = `${tank.name} が発射！`;
