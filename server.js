@@ -23,10 +23,13 @@ const TANK_RADIUS = 18;
 const TANK_SPEED = 150;
 const SPEED_BOOST_MULTIPLIER = 1.45;
 const SPEED_BOOST_MS = 8000;
+const ROTATE_BOOST_MULTIPLIER = 1.65;
+const ROTATE_BOOST_MS = 8000;
 const CHARGE_BOOST_TIME = 1.15;
 const CHARGE_BOOST_MS = 8000;
 const SIZE_UP_MULTIPLIER = 1.45;
 const SIZE_UP_MS = 8000;
+const INVISIBLE_MS = 8000;
 const ITEM_RADIUS = 13;
 const ITEM_PICKUP_RADIUS = 30;
 const ITEM_MAX_COUNT = 3;
@@ -176,8 +179,10 @@ function cloneRoomForSave(room) {
       score: tank.score || 0,
       color: tank.color,
       speedBoostUntil: tank.speedBoostUntil || 0,
+      rotateBoostUntil: tank.rotateBoostUntil || 0,
       chargeBoostUntil: tank.chargeBoostUntil || 0,
       sizeUpUntil: tank.sizeUpUntil || 0,
+      invisibleUntil: tank.invisibleUntil || 0,
     })),
   };
 }
@@ -227,6 +232,11 @@ function loadRoomsFromDisk() {
         hold: false,
         charge: tank.charge || 0,
         bumpCooldown: 0,
+        speedBoostUntil: tank.speedBoostUntil || 0,
+        rotateBoostUntil: tank.rotateBoostUntil || 0,
+        chargeBoostUntil: tank.chargeBoostUntil || 0,
+        sizeUpUntil: tank.sizeUpUntil || 0,
+        invisibleUntil: tank.invisibleUntil || 0,
       }));
       rawRoom.lastTick = now;
       rawRoom.message = 'サーバー再起動後の部屋を復元しました。各プレイヤーは再接続してください。';
@@ -266,8 +276,10 @@ function makeTank(slot, name, socketId, token) {
     score: 0,
     color: PLAYER_COLORS[slot] || '#facc15',
     speedBoostUntil: 0,
+    rotateBoostUntil: 0,
     chargeBoostUntil: 0,
     sizeUpUntil: 0,
+    invisibleUntil: 0,
   };
 }
 
@@ -281,8 +293,10 @@ function resetPositions(room) {
     tank.charge = 0;
     tank.bumpCooldown = 0;
     tank.speedBoostUntil = 0;
+    tank.rotateBoostUntil = 0;
     tank.chargeBoostUntil = 0;
     tank.sizeUpUntil = 0;
+    tank.invisibleUntil = 0;
   });
   room.bullets = [];
   room.roundResetUntil = Date.now() + 700;
@@ -314,8 +328,10 @@ function publicState(room) {
       score: t.score,
       color: t.color,
       speedBoostUntil: t.speedBoostUntil || 0,
+      rotateBoostUntil: t.rotateBoostUntil || 0,
       chargeBoostUntil: t.chargeBoostUntil || 0,
       sizeUpUntil: t.sizeUpUntil || 0,
+      invisibleUntil: t.invisibleUntil || 0,
       radius: getTankRadius(t),
     })),
     bullets: room.bullets,
@@ -463,6 +479,10 @@ function getTankSpeed(tank) {
   return TANK_SPEED * ((tank && tank.speedBoostUntil && tank.speedBoostUntil > Date.now()) ? SPEED_BOOST_MULTIPLIER : 1);
 }
 
+function getTankRotateSpeed(tank) {
+  return ROTATE_SPEED * ((tank && tank.rotateBoostUntil && tank.rotateBoostUntil > Date.now()) ? ROTATE_BOOST_MULTIPLIER : 1);
+}
+
 function tankCanMove(room, tank, nextX, nextY) {
   const radius = getTankRadius(tank);
   if (nextX < radius || nextX > AREA.w - radius) return false;
@@ -541,8 +561,10 @@ function reflectBulletOnObstacle(bullet, prevX, prevY, line) {
 
 const ITEM_TYPES = [
   { type: 'speed', label: '速度UP', color: '#38bdf8' },
+  { type: 'rotate', label: '回転速度UP', color: '#c084fc' },
   { type: 'charge', label: 'チャージ短縮', color: '#facc15' },
   { type: 'size', label: '敵巨大化', color: '#fb7185' },
+  { type: 'invisible', label: '透明化', color: '#94a3b8' },
 ];
 
 function isPointSafeForItem(room, x, y) {
@@ -604,19 +626,37 @@ function spawnItemsIfNeeded(room) {
   room.lastItemSpawnAt = now;
 }
 
+function stackEffectUntil(currentUntil, now, durationMs) {
+  // 同じ効果を重ねて拾ったら、現在の残り時間に効果時間を加算する。
+  // すでに切れている場合は今から durationMs。
+  return Math.max(currentUntil || 0, now) + durationMs;
+}
+
+function remainingSeconds(until, now) {
+  return Math.max(0, Math.ceil(((until || 0) - now) / 1000));
+}
+
 function applyItem(room, tank, item) {
   const now = Date.now();
   if (item.type === 'speed') {
-    tank.speedBoostUntil = now + SPEED_BOOST_MS;
-    room.message = `${tank.name} が速度UPを取得！`;
+    tank.speedBoostUntil = stackEffectUntil(tank.speedBoostUntil, now, SPEED_BOOST_MS);
+    room.message = `${tank.name} が速度UPを取得！効果時間 ${remainingSeconds(tank.speedBoostUntil, now)}秒`;
+  } else if (item.type === 'rotate') {
+    tank.rotateBoostUntil = stackEffectUntil(tank.rotateBoostUntil, now, ROTATE_BOOST_MS);
+    room.message = `${tank.name} が回転速度UPを取得！効果時間 ${remainingSeconds(tank.rotateBoostUntil, now)}秒`;
   } else if (item.type === 'charge') {
-    tank.chargeBoostUntil = now + CHARGE_BOOST_MS;
-    room.message = `${tank.name} がチャージ短縮を取得！`;
+    tank.chargeBoostUntil = stackEffectUntil(tank.chargeBoostUntil, now, CHARGE_BOOST_MS);
+    room.message = `${tank.name} がチャージ短縮を取得！効果時間 ${remainingSeconds(tank.chargeBoostUntil, now)}秒`;
   } else if (item.type === 'size') {
     room.tanks.forEach((other) => {
-      if (other && other.slot !== tank.slot) other.sizeUpUntil = now + SIZE_UP_MS;
+      if (other && other.slot !== tank.slot) {
+        other.sizeUpUntil = stackEffectUntil(other.sizeUpUntil, now, SIZE_UP_MS);
+      }
     });
-    room.message = `${tank.name} が敵巨大化を取得！`;
+    room.message = `${tank.name} が敵巨大化を取得！相手の巨大化時間を延長しました`;
+  } else if (item.type === 'invisible') {
+    tank.invisibleUntil = stackEffectUntil(tank.invisibleUntil, now, INVISIBLE_MS);
+    room.message = `${tank.name} が透明化を取得！効果時間 ${remainingSeconds(tank.invisibleUntil, now)}秒`;
   }
 }
 
@@ -713,7 +753,7 @@ function updateRoom(room, dt) {
         room.message = `${tank.name} が発射！`;
       }
     } else {
-      tank.angle += ROTATE_SPEED * dt;
+      tank.angle += getTankRotateSpeed(tank) * dt;
       if (tank.angle > Math.PI * 2) tank.angle -= Math.PI * 2;
       tank.charge = 0;
     }

@@ -161,7 +161,7 @@
       <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、2秒で弾を発射します。</div>
       <div class="rule"><strong>反射</strong>弾は外壁・直線障害物で反射し、5回反射すると消えます。</div>
       <div class="rule"><strong>勝利</strong>誰かに弾が当たると発射者が得点。自分に当てると他プレイヤーが得点。5点先取で勝利です。</div>
-      <div class="rule"><strong>EXTRA</strong>速度UP・チャージ短縮・敵巨大化アイテムが出現します。効果は一定時間で切れます。</div>
+      <div class="rule"><strong>EXTRA</strong>速度UP・回転速度UP・チャージ短縮・敵巨大化・透明化アイテムが出現します。同じ効果を重ねて拾うと、残り効果時間に加算されます。</div>
     </section>
 
     <div class="btn-row" style="justify-content:center; margin-top:14px">
@@ -394,7 +394,7 @@
         ctx.font = '900 14px system-ui';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const mark = item.type === 'speed' ? 'S' : item.type === 'charge' ? 'C' : 'L';
+        const mark = item.type === 'speed' ? 'S' : item.type === 'rotate' ? 'R' : item.type === 'charge' ? 'C' : item.type === 'size' ? 'L' : 'I';
         ctx.fillText(mark, 0, 0);
         ctx.restore();
 
@@ -414,12 +414,18 @@
       });
     }
 
+    function effectRemain(until) {
+      return Math.max(1, Math.ceil((until - Date.now()) / 1000));
+    }
+
     function drawEffectBadges(tank) {
       const effects = [];
       const now = Date.now();
-      if (tank.speedBoostUntil && tank.speedBoostUntil > now) effects.push('速度UP');
-      if (tank.chargeBoostUntil && tank.chargeBoostUntil > now) effects.push('短縮');
-      if (tank.sizeUpUntil && tank.sizeUpUntil > now) effects.push('巨大');
+      if (tank.speedBoostUntil && tank.speedBoostUntil > now) effects.push(`速度UP ${effectRemain(tank.speedBoostUntil)}s`);
+      if (tank.rotateBoostUntil && tank.rotateBoostUntil > now) effects.push(`回転UP ${effectRemain(tank.rotateBoostUntil)}s`);
+      if (tank.chargeBoostUntil && tank.chargeBoostUntil > now) effects.push(`短縮 ${effectRemain(tank.chargeBoostUntil)}s`);
+      if (tank.sizeUpUntil && tank.sizeUpUntil > now) effects.push(`巨大 ${effectRemain(tank.sizeUpUntil)}s`);
+      if (tank.invisibleUntil && tank.invisibleUntil > now) effects.push(`透明 ${effectRemain(tank.invisibleUntil)}s`);
       if (!effects.length) return;
       ctx.save();
       ctx.font = 'bold 11px system-ui';
@@ -438,6 +444,8 @@
       (state.tanks || []).forEach((tank) => {
         if (!tank) return;
         ctx.save();
+        const isInvisible = tank.invisibleUntil && tank.invisibleUntil > Date.now();
+        if (isInvisible) ctx.globalAlpha = tank.slot === mySlot ? 0.55 : 0.28;
         const radius = tank.radius || 18;
         ctx.translate(tank.x, tank.y);
         ctx.rotate(tank.angle);
