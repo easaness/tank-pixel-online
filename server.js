@@ -21,6 +21,19 @@ const ROOM_TTL_MS = 1000 * 60 * 60 * 6; // 全員が退出しても6時間は部
 const AREA = { w: 960, h: 540 };
 const TANK_RADIUS = 18;
 const TANK_SPEED = 150;
+const SPEED_BOOST_MULTIPLIER = 1.45;
+const SPEED_BOOST_MS = 8000;
+const ROTATE_BOOST_MULTIPLIER = 1.65;
+const ROTATE_BOOST_MS = 8000;
+const CHARGE_BOOST_TIME = 1.15;
+const CHARGE_BOOST_MS = 8000;
+const SIZE_UP_MULTIPLIER = 1.45;
+const SIZE_UP_MS = 8000;
+const INVISIBLE_MS = 8000;
+const ITEM_RADIUS = 13;
+const ITEM_PICKUP_RADIUS = 30;
+const ITEM_MAX_COUNT = 3;
+const ITEM_RESPAWN_MS = 4500;
 const ROTATE_SPEED = Math.PI * 0.72;
 const BULLET_SPEED = 360;
 const BULLET_RADIUS = 6;
@@ -32,11 +45,6 @@ const OBSTACLE_COUNT = 3;
 const SPAWN_SAFE_RADIUS = 135;
 const BUMP_BACK_DISTANCE = 10;
 const BUMP_COOLDOWN = 0.12;
-const ITEM_RADIUS = 15;
-const MAX_ITEMS = 2;
-const ITEM_SPAWN_INTERVAL_MS = 6500;
-const ITEM_EFFECT_MS = 6500;
-const ITEM_TYPES = ['speed', 'quick', 'shield', 'clear'];
 const SPAWNS = [
   { x: 150, y: AREA.h / 2, angle: 0 },
   { x: AREA.w - 150, y: AREA.h / 2, angle: Math.PI },
@@ -145,10 +153,11 @@ function cloneRoomForSave(room) {
     code: room.code,
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
-    gameMode: room.gameMode || 'score',
-    bullets: room.bullets || [],
+    mode: room.mode || 'standard',
+    scoreMode: room.scoreMode || 'hit',
     items: room.items || [],
-    nextItemAt: room.nextItemAt || 0,
+    lastItemSpawnAt: room.lastItemSpawnAt || 0,
+    bullets: room.bullets || [],
     winnerSlot: room.winnerSlot ?? null,
     winnerSlots: room.winnerSlots || [],
     message: room.message || '',
@@ -171,7 +180,11 @@ function cloneRoomForSave(room) {
       score: tank.score || 0,
       alive: tank.alive !== false,
       color: tank.color,
-      effects: tank.effects || {},
+      speedBoostUntil: tank.speedBoostUntil || 0,
+      rotateBoostUntil: tank.rotateBoostUntil || 0,
+      chargeBoostUntil: tank.chargeBoostUntil || 0,
+      sizeUpUntil: tank.sizeUpUntil || 0,
+      invisibleUntil: tank.invisibleUntil || 0,
     })),
   };
 }
@@ -211,6 +224,10 @@ function loadRoomsFromDisk() {
     for (const rawRoom of parsed.rooms || []) {
       if (!rawRoom || !rawRoom.code) continue;
       if (now - (rawRoom.lastTouched || parsed.savedAt || now) > ROOM_TTL_MS) continue;
+      rawRoom.mode = rawRoom.mode || 'standard';
+      rawRoom.scoreMode = rawRoom.scoreMode || 'hit';
+      rawRoom.items = rawRoom.items || [];
+      rawRoom.lastItemSpawnAt = rawRoom.lastItemSpawnAt || 0;
       rawRoom.tanks = (rawRoom.tanks || []).map((tank) => tank && ({
         ...tank,
         socketId: '',
@@ -219,7 +236,11 @@ function loadRoomsFromDisk() {
         charge: tank.charge || 0,
         bumpCooldown: 0,
         alive: tank.alive !== false,
-        effects: tank.effects || {},
+        speedBoostUntil: tank.speedBoostUntil || 0,
+        rotateBoostUntil: tank.rotateBoostUntil || 0,
+        chargeBoostUntil: tank.chargeBoostUntil || 0,
+        sizeUpUntil: tank.sizeUpUntil || 0,
+        invisibleUntil: tank.invisibleUntil || 0,
       }));
       rawRoom.lastTick = now;
       rawRoom.message = 'サーバー再起動後の部屋を復元しました。各プレイヤーは再接続してください。';
@@ -257,9 +278,13 @@ function makeTank(slot, name, socketId, token) {
     charge: 0,
     bumpCooldown: 0,
     score: 0,
-    color: PLAYER_COLORS[slot] || '#facc15',
     alive: true,
-    effects: {},
+    color: PLAYER_COLORS[slot] || '#facc15',
+    speedBoostUntil: 0,
+    rotateBoostUntil: 0,
+    chargeBoostUntil: 0,
+    sizeUpUntil: 0,
+    invisibleUntil: 0,
   };
 }
 
@@ -273,11 +298,13 @@ function resetPositions(room) {
     tank.charge = 0;
     tank.bumpCooldown = 0;
     tank.alive = true;
-    tank.effects = {};
+    tank.speedBoostUntil = 0;
+    tank.rotateBoostUntil = 0;
+    tank.chargeBoostUntil = 0;
+    tank.sizeUpUntil = 0;
+    tank.invisibleUntil = 0;
   });
   room.bullets = [];
-  room.items = [];
-  room.nextItemAt = Date.now() + 1800;
   room.roundResetUntil = Date.now() + 700;
 }
 
@@ -287,13 +314,15 @@ function publicState(room) {
     area: AREA,
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
-    gameMode: room.gameMode || 'score',
+    mode: room.mode || 'standard',
+    scoreMode: room.scoreMode || 'hit',
     winnerSlot: room.winnerSlot,
     winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
     chargeTime: CHARGE_TIME,
+    chargeBoostTime: CHARGE_BOOST_TIME,
+    items: room.items || [],
     obstacles: room.obstacles || [],
-    items: (room.items || []).map((item) => ({ id: item.id, x: item.x, y: item.y })),
     tanks: room.tanks.map((t) => t && ({
       slot: t.slot,
       name: t.name,
@@ -304,9 +333,14 @@ function publicState(room) {
       hold: t.hold,
       charge: t.charge,
       score: t.score,
-      color: t.color,
       alive: t.alive !== false,
-      effects: publicEffects(t),
+      color: t.color,
+      speedBoostUntil: t.speedBoostUntil || 0,
+      rotateBoostUntil: t.rotateBoostUntil || 0,
+      chargeBoostUntil: t.chargeBoostUntil || 0,
+      sizeUpUntil: t.sizeUpUntil || 0,
+      invisibleUntil: t.invisibleUntil || 0,
+      radius: getTankRadius(t),
     })),
     bullets: room.bullets,
     roundResetUntil: room.roundResetUntil,
@@ -320,137 +354,30 @@ function normalizePlayerCount(value) {
   return count;
 }
 
-
-function normalizeGameMode(value) {
-  return value === 'survival' ? 'survival' : 'score';
-}
-
-function publicEffects(tank) {
-  const now = Date.now();
-  const effects = tank.effects || {};
-  return {
-    speed: (effects.speedUntil || 0) > now,
-    quick: (effects.quickUntil || 0) > now,
-    shield: (effects.shieldUntil || 0) > now,
-  };
-}
-
-function isTankShielded(tank) {
-  return !!(tank && tank.effects && (tank.effects.shieldUntil || 0) > Date.now());
-}
-
-function clearExpiredEffects(room) {
-  const now = Date.now();
-  for (const tank of room.tanks || []) {
-    if (!tank || !tank.effects) continue;
-    if ((tank.effects.speedUntil || 0) <= now) delete tank.effects.speedUntil;
-    if ((tank.effects.quickUntil || 0) <= now) delete tank.effects.quickUntil;
-    if ((tank.effects.shieldUntil || 0) <= now) delete tank.effects.shieldUntil;
-  }
-}
-
-function isPointSafeForItem(room, x, y) {
-  const margin = 58;
-  if (x < margin || x > AREA.w - margin || y < margin || y > AREA.h - margin) return false;
-  for (const spawn of SPAWNS) {
-    if (Math.hypot(x - spawn.x, y - spawn.y) < SPAWN_SAFE_RADIUS * 0.72) return false;
-  }
-  for (const obstacle of (room.obstacles || [])) {
-    if (pointLineDistance(x, y, obstacle) < ITEM_RADIUS + OBSTACLE_HALF_WIDTH + 18) return false;
-  }
-  for (const tank of (room.tanks || [])) {
-    if (tank && Math.hypot(x - tank.x, y - tank.y) < 90) return false;
-  }
-  for (const item of (room.items || [])) {
-    if (Math.hypot(x - item.x, y - item.y) < 90) return false;
-  }
-  return true;
-}
-
-function makeRandomItem(room) {
-  for (let i = 0; i < 120; i++) {
-    const x = Math.round(randomBetween(80, AREA.w - 80));
-    const y = Math.round(randomBetween(70, AREA.h - 70));
-    if (!isPointSafeForItem(room, x, y)) continue;
-    return {
-      id: cryptoToken(),
-      x,
-      y,
-      type: ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)],
-    };
-  }
-  return null;
-}
-
-function maybeSpawnItems(room) {
-  if (room.status !== 'playing') return;
-  const now = Date.now();
-  if (!room.items) room.items = [];
-  if (!room.nextItemAt) room.nextItemAt = now + ITEM_SPAWN_INTERVAL_MS;
-  if (room.items.length >= MAX_ITEMS || now < room.nextItemAt) return;
-  const item = makeRandomItem(room);
-  if (item) room.items.push(item);
-  room.nextItemAt = now + ITEM_SPAWN_INTERVAL_MS + Math.floor(Math.random() * 2600);
-}
-
-function applyItemEffect(room, tank, item) {
-  const now = Date.now();
-  if (!tank.effects) tank.effects = {};
-  const label = {
-    speed: 'スピードアップ',
-    quick: '高速チャージ',
-    shield: 'シールド',
-    clear: '弾消し',
-  }[item.type] || 'アイテム';
-
-  if (item.type === 'speed') {
-    tank.effects.speedUntil = now + ITEM_EFFECT_MS;
-  } else if (item.type === 'quick') {
-    tank.effects.quickUntil = now + ITEM_EFFECT_MS;
-  } else if (item.type === 'shield') {
-    tank.effects.shieldUntil = now + ITEM_EFFECT_MS + 1500;
-  } else if (item.type === 'clear') {
-    room.bullets = [];
-  }
-  room.message = `${tank.name} が「${label}」を獲得！`;
-  touchRoom(room);
-}
-
-function checkItemPickup(room, tank) {
-  if (!room.items || !room.items.length || tank.alive === false) return;
-  const kept = [];
-  for (const item of room.items) {
-    if (Math.hypot(tank.x - item.x, tank.y - item.y) <= TANK_RADIUS + ITEM_RADIUS) {
-      applyItemEffect(room, tank, item);
-    } else {
-      kept.push(item);
-    }
-  }
-  room.items = kept;
-}
-
-function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
+function createRoom(hostName, socket, playerCount = 2, mode = 'standard', scoreMode = 'hit') {
   const code = roomCode();
   const token = cryptoToken();
   const maxPlayers = normalizePlayerCount(playerCount);
-  const normalizedMode = normalizeGameMode(gameMode);
+  const gameMode = mode === 'extra' ? 'extra' : 'standard';
+  const normalizedScoreMode = gameMode === 'extra' && maxPlayers >= 3 && scoreMode === 'survival' ? 'survival' : 'hit';
   const tanks = Array.from({ length: maxPlayers }, () => null);
   tanks[0] = makeTank(0, hostName, socket.id, token);
   const room = {
     code,
     status: 'waiting',
     maxPlayers,
-    gameMode: normalizedMode,
+    mode: gameMode,
+    scoreMode: normalizedScoreMode,
     tanks,
     bullets: [],
-    items: [],
-    nextItemAt: Date.now() + 2500,
     winnerSlot: null,
     winnerSlots: [],
     message: `参加者を待っています。1/${maxPlayers}人`,
     lastTick: Date.now(),
     roundResetUntil: 0,
     obstacles: generateObstacles(),
+    items: [],
+    lastItemSpawnAt: 0,
   };
   rooms.set(code, room);
   touchRoom(room);
@@ -516,13 +443,13 @@ function startMatch(room) {
   room.winnerSlot = null;
   room.winnerSlots = [];
   room.obstacles = generateObstacles();
+  room.items = room.mode === 'extra' ? generateInitialItems(room) : [];
+  room.lastItemSpawnAt = Date.now();
   room.tanks.forEach((tank) => {
-    if (tank) tank.score = 0;
+    if (tank) { tank.score = 0; tank.alive = true; }
   });
   resetPositions(room);
-  room.message = room.gameMode === 'survival'
-    ? `${room.maxPlayers}人サバイバル開始！最後まで生き残った1人が1ポイントです。`
-    : `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
+  room.message = `${room.maxPlayers}人対戦開始！${room.mode === 'extra' ? 'エクストラモード：アイテムあり。' : '標準モード。'}${room.scoreMode === 'survival' ? ' 生き残り得点ルール。最後まで残ると1点です。' : ' ヒット得点ルール。'} 長押しで前進、2秒チャージで弾を発射します。`;
   touchRoom(room);
 }
 
@@ -550,17 +477,34 @@ function circleLineHit(cx, cy, radius, line) {
 }
 
 
+function getTankRadius(tank) {
+  return TANK_RADIUS * ((tank && tank.sizeUpUntil && tank.sizeUpUntil > Date.now()) ? SIZE_UP_MULTIPLIER : 1);
+}
+
+function getTankChargeTime(tank) {
+  return (tank && tank.chargeBoostUntil && tank.chargeBoostUntil > Date.now()) ? CHARGE_BOOST_TIME : CHARGE_TIME;
+}
+
+function getTankSpeed(tank) {
+  return TANK_SPEED * ((tank && tank.speedBoostUntil && tank.speedBoostUntil > Date.now()) ? SPEED_BOOST_MULTIPLIER : 1);
+}
+
+function getTankRotateSpeed(tank) {
+  return ROTATE_SPEED * ((tank && tank.rotateBoostUntil && tank.rotateBoostUntil > Date.now()) ? ROTATE_BOOST_MULTIPLIER : 1);
+}
+
 function tankCanMove(room, tank, nextX, nextY) {
-  if (nextX < TANK_RADIUS || nextX > AREA.w - TANK_RADIUS) return false;
-  if (nextY < TANK_RADIUS || nextY > AREA.h - TANK_RADIUS) return false;
+  const radius = getTankRadius(tank);
+  if (nextX < radius || nextX > AREA.w - radius) return false;
+  if (nextY < radius || nextY > AREA.h - radius) return false;
 
   for (const obstacle of (room.obstacles || [])) {
-    if (circleLineHit(nextX, nextY, TANK_RADIUS, obstacle)) return false;
+    if (circleLineHit(nextX, nextY, radius, obstacle)) return false;
   }
 
   for (const other of room.tanks) {
     if (!other || other.slot === tank.slot || other.alive === false) continue;
-    if (Math.hypot(nextX - other.x, nextY - other.y) < TANK_RADIUS * 2) return false;
+    if (Math.hypot(nextX - other.x, nextY - other.y) < radius + getTankRadius(other)) return false;
   }
 
   return true;
@@ -624,6 +568,121 @@ function reflectBulletOnObstacle(bullet, prevX, prevY, line) {
 }
 
 
+
+const ITEM_TYPES = [
+  { type: 'speed', label: '速度UP', color: '#38bdf8' },
+  { type: 'rotate', label: '回転速度UP', color: '#c084fc' },
+  { type: 'charge', label: 'チャージ短縮', color: '#facc15' },
+  { type: 'size', label: '敵巨大化', color: '#fb7185' },
+  { type: 'invisible', label: '透明化', color: '#94a3b8' },
+];
+
+function isPointSafeForItem(room, x, y) {
+  const margin = 48;
+  if (x < margin || x > AREA.w - margin || y < margin || y > AREA.h - margin) return false;
+  for (const spawn of SPAWNS) {
+    if (Math.hypot(x - spawn.x, y - spawn.y) < SPAWN_SAFE_RADIUS - 20) return false;
+  }
+  for (const obstacle of (room.obstacles || [])) {
+    if (pointLineDistance(x, y, obstacle) < 42) return false;
+  }
+  for (const tank of (room.tanks || [])) {
+    if (tank && Math.hypot(x - tank.x, y - tank.y) < 80) return false;
+  }
+  for (const item of (room.items || [])) {
+    if (Math.hypot(x - item.x, y - item.y) < 90) return false;
+  }
+  return true;
+}
+
+function makeItem(room) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const x = Math.round(randomBetween(90, AREA.w - 90));
+    const y = Math.round(randomBetween(70, AREA.h - 70));
+    if (!isPointSafeForItem(room, x, y)) continue;
+    const template = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
+    return {
+      id: cryptoToken(),
+      type: template.type,
+      label: template.label,
+      color: template.color,
+      x,
+      y,
+      bornAt: Date.now(),
+    };
+  }
+  return null;
+}
+
+function generateInitialItems(room) {
+  const items = [];
+  const tempRoom = { ...room, items };
+  while (items.length < ITEM_MAX_COUNT) {
+    const item = makeItem(tempRoom);
+    if (!item) break;
+    items.push(item);
+  }
+  return items;
+}
+
+function spawnItemsIfNeeded(room) {
+  if (room.mode !== 'extra') return;
+  room.items = room.items || [];
+  const now = Date.now();
+  if (room.items.length >= ITEM_MAX_COUNT) return;
+  if (now - (room.lastItemSpawnAt || 0) < ITEM_RESPAWN_MS) return;
+  const item = makeItem(room);
+  if (item) room.items.push(item);
+  room.lastItemSpawnAt = now;
+}
+
+function stackEffectUntil(currentUntil, now, durationMs) {
+  // 同じ効果を重ねて拾ったら、現在の残り時間に効果時間を加算する。
+  // すでに切れている場合は今から durationMs。
+  return Math.max(currentUntil || 0, now) + durationMs;
+}
+
+function remainingSeconds(until, now) {
+  return Math.max(0, Math.ceil(((until || 0) - now) / 1000));
+}
+
+function applyItem(room, tank, item) {
+  const now = Date.now();
+  if (item.type === 'speed') {
+    tank.speedBoostUntil = stackEffectUntil(tank.speedBoostUntil, now, SPEED_BOOST_MS);
+    room.message = `${tank.name} が速度UPを取得！効果時間 ${remainingSeconds(tank.speedBoostUntil, now)}秒`;
+  } else if (item.type === 'rotate') {
+    tank.rotateBoostUntil = stackEffectUntil(tank.rotateBoostUntil, now, ROTATE_BOOST_MS);
+    room.message = `${tank.name} が回転速度UPを取得！効果時間 ${remainingSeconds(tank.rotateBoostUntil, now)}秒`;
+  } else if (item.type === 'charge') {
+    tank.chargeBoostUntil = stackEffectUntil(tank.chargeBoostUntil, now, CHARGE_BOOST_MS);
+    room.message = `${tank.name} がチャージ短縮を取得！効果時間 ${remainingSeconds(tank.chargeBoostUntil, now)}秒`;
+  } else if (item.type === 'size') {
+    room.tanks.forEach((other) => {
+      if (other && other.slot !== tank.slot) {
+        other.sizeUpUntil = stackEffectUntil(other.sizeUpUntil, now, SIZE_UP_MS);
+      }
+    });
+    room.message = `${tank.name} が敵巨大化を取得！相手の巨大化時間を延長しました`;
+  } else if (item.type === 'invisible') {
+    tank.invisibleUntil = stackEffectUntil(tank.invisibleUntil, now, INVISIBLE_MS);
+    room.message = `${tank.name} が透明化を取得！効果時間 ${remainingSeconds(tank.invisibleUntil, now)}秒`;
+  }
+}
+
+function handleItemPickups(room, tank) {
+  if (room.mode !== 'extra' || !room.items || !room.items.length) return;
+  const kept = [];
+  for (const item of room.items) {
+    if (Math.hypot(tank.x - item.x, tank.y - item.y) <= ITEM_PICKUP_RADIUS) {
+      applyItem(room, tank, item);
+    } else {
+      kept.push(item);
+    }
+  }
+  room.items = kept;
+}
+
 function fireBullet(room, tank) {
   const muzzle = TANK_RADIUS + 10;
   room.bullets.push({
@@ -643,51 +702,29 @@ function aliveTanks(room) {
   return room.tanks.filter((tank) => tank && tank.alive !== false);
 }
 
-function endSurvivalRound(room, survivor) {
+function resolveSurvivalHit(room, victimSlot, bulletOwner) {
   if (room.status !== 'playing') return;
+  const victim = room.tanks[victimSlot];
+  if (!victim || victim.alive === false) return;
+  victim.alive = false;
+  victim.hold = false;
+  victim.charge = 0;
   room.bullets = [];
 
-  if (survivor) {
-    survivor.score += 1;
-    const winners = room.tanks.filter((tank) => tank && tank.score >= WIN_SCORE);
-    if (winners.length) {
-      const maxScore = Math.max(...winners.map((tank) => tank.score));
-      const finalWinners = winners.filter((tank) => tank.score === maxScore);
-      room.status = 'finished';
-      room.winnerSlot = finalWinners[0].slot;
-      room.winnerSlots = finalWinners.map((tank) => tank.slot);
-      room.message = `${finalWinners.map((tank) => tank.name).join('・')} の勝利！`;
-      room.tanks.forEach((tank) => {
-        if (tank) {
-          tank.hold = false;
-          tank.charge = 0;
-        }
-      });
-      touchRoom(room);
-      return;
+  const alive = aliveTanks(room);
+  if (alive.length <= 1) {
+    const survivor = alive[0];
+    if (survivor) {
+      scorePoint(room, survivor.slot);
+    } else {
+      room.message = '全員撃破されました。ラウンドをリセットします。';
+      resetPositions(room);
     }
-    room.message = `${survivor.name} が最後まで生き残って1ポイント！次のラウンドへ。`;
   } else {
-    room.message = '全員が倒れました。ポイントなしで次のラウンドへ。';
+    room.message = `${victim.name} が撃破されました。残り${alive.length}人！最後まで残ると1点です。`;
+    room.roundResetUntil = Date.now() + 350;
   }
-
-  resetPositions(room);
   touchRoom(room);
-}
-
-function eliminateTank(room, tank, reason) {
-  if (!tank || tank.alive === false || room.status !== 'playing') return;
-  tank.alive = false;
-  tank.hold = false;
-  tank.charge = 0;
-  room.message = `${tank.name} が撃破されました。`;
-
-  const survivors = aliveTanks(room);
-  if (survivors.length <= 1) {
-    endSurvivalRound(room, survivors[0] || null);
-  } else {
-    touchRoom(room);
-  }
 }
 
 function scorePoint(room, scorerSlots) {
@@ -724,9 +761,8 @@ function scorePoint(room, scorerSlots) {
 
 function updateRoom(room, dt) {
   if (room.status !== 'playing') return;
-  clearExpiredEffects(room);
-  maybeSpawnItems(room);
   if (room.tanks.filter(Boolean).length < (room.maxPlayers || 2)) return;
+  spawnItemsIfNeeded(room);
   if (Date.now() < room.roundResetUntil) return;
 
   for (const tank of room.tanks) {
@@ -735,14 +771,15 @@ function updateRoom(room, dt) {
     tank.bumpCooldown = Math.max(0, (tank.bumpCooldown || 0) - dt);
 
     if (tank.hold) {
-      const tankSpeed = TANK_SPEED * (publicEffects(tank).speed ? 1.42 : 1);
-      const nextX = tank.x + Math.cos(tank.angle) * tankSpeed * dt;
-      const nextY = tank.y + Math.sin(tank.angle) * tankSpeed * dt;
+      const speed = getTankSpeed(tank);
+      const nextX = tank.x + Math.cos(tank.angle) * speed * dt;
+      const nextY = tank.y + Math.sin(tank.angle) * speed * dt;
       const canMove = tankCanMove(room, tank, nextX, nextY);
 
       if (canMove) {
         tank.x = nextX;
         tank.y = nextY;
+        handleItemPickups(room, tank);
         tank.charge += dt;
       } else {
         bumpTankBack(room, tank);
@@ -751,21 +788,16 @@ function updateRoom(room, dt) {
         tank.charge += dt;
       }
 
-      const effectiveChargeTime = publicEffects(tank).quick ? 1.05 : CHARGE_TIME;
-      if (tank.charge >= effectiveChargeTime) {
+      if (tank.charge >= getTankChargeTime(tank)) {
         fireBullet(room, tank);
         tank.charge = 0;
         room.message = `${tank.name} が発射！`;
       }
     } else {
-      tank.angle += ROTATE_SPEED * dt;
+      tank.angle += getTankRotateSpeed(tank) * dt;
       if (tank.angle > Math.PI * 2) tank.angle -= Math.PI * 2;
       tank.charge = 0;
     }
-  }
-
-  for (const tank of room.tanks) {
-    if (tank) checkItemPickup(room, tank);
   }
 
   const kept = [];
@@ -810,39 +842,32 @@ function updateRoom(room, dt) {
       if (!tank || tank.alive === false) continue;
       const dx = tank.x - bullet.x;
       const dy = tank.y - bullet.y;
-      if (Math.hypot(dx, dy) <= TANK_RADIUS + BULLET_RADIUS) {
-        if (isTankShielded(tank)) {
-          delete tank.effects.shieldUntil;
-          room.message = `${tank.name} のシールドが弾を防いだ！`;
-          hit = true;
-          break;
+      if (Math.hypot(dx, dy) <= getTankRadius(tank) + BULLET_RADIUS) {
+        if (room.scoreMode === 'survival') {
+          resolveSurvivalHit(room, tank.slot, bullet.owner);
+        } else {
+          const scorerSlots = tank.slot === bullet.owner
+            ? room.tanks.filter((other) => other && other.slot !== bullet.owner).map((other) => other.slot)
+            : [bullet.owner];
+          scorePoint(room, scorerSlots);
         }
-        if (room.gameMode === 'survival') {
-          eliminateTank(room, tank, tank.slot === bullet.owner ? 'self' : 'hit');
-          return;
-        }
-        const scorerSlots = tank.slot === bullet.owner
-          ? room.tanks.filter((other) => other && other.slot !== bullet.owner).map((other) => other.slot)
-          : [bullet.owner];
-        scorePoint(room, scorerSlots);
         return; // 得点・リセット時はフィールド上の弾をすべて消した状態を保つ
       }
     }
-    if (hit) continue;
     if (room.status === 'playing') kept.push(bullet);
   }
   room.bullets = kept;
 }
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, playerCount, gameMode }) => createRoom(name, socket, playerCount, gameMode));
+  socket.on('createRoom', ({ name, playerCount, mode, scoreMode }) => createRoom(name, socket, playerCount, mode, scoreMode));
   socket.on('joinRoom', ({ code, name, token }) => joinRoom(code, name, socket, token));
 
   socket.on('setHold', ({ hold }) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || room.status !== 'playing') return;
     const tank = room.tanks[socket.data.slot];
-    if (!tank || tank.token !== socket.data.token || tank.alive === false) return;
+    if (!tank || tank.token !== socket.data.token) return;
     tank.hold = !!hold;
     if (!tank.hold) tank.charge = 0;
     touchRoom(room);
