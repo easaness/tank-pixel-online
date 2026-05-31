@@ -216,8 +216,13 @@ function spawnRandomItem(room, force = false) {
 
 function resetItems(room) {
   room.items = [];
-  room.nextItemAt = Date.now() + 1800;
-  spawnRandomItem(room, true);
+  const now = Date.now();
+  room.nextItemAt = now;
+  // 初期盤面には必ず最大3個のアイテムを配置します。
+  for (let i = 0; i < ITEM_MAX_COUNT; i += 1) {
+    spawnRandomItem(room, true);
+  }
+  room.nextItemAt = now + ITEM_SPAWN_INTERVAL_MS;
 }
 
 function itemPublicState(item) {
@@ -479,7 +484,8 @@ function resetPositions(room) {
   room.roundResetUntil = Date.now() + 700;
 }
 
-function publicState(room) {
+function publicState(room, viewerSlot = null) {
+  const now = Date.now();
   return {
     code: room.code,
     area: AREA,
@@ -492,24 +498,31 @@ function publicState(room) {
     chargeTime: CHARGE_TIME,
     obstacles: room.obstacles || [],
     items: (room.items || []).map(itemPublicState),
-    tanks: room.tanks.map((t) => t && ({
-      slot: t.slot,
-      name: t.name,
-      connected: t.connected,
-      x: t.x,
-      y: t.y,
-      angle: t.angle,
-      hold: t.hold,
-      charge: t.charge,
-      score: t.score,
-      color: t.color,
-      alive: t.alive !== false,
-      effects: activeEffectsForPublic(t),
-      shield: false,
-      giant: (t.giantUntil || 0) > Date.now(),
-      invisible: (t.invisibleUntil || 0) > Date.now(),
-      lastItem: t.lastItem || '',
-    })),
+    tanks: room.tanks.map((t) => {
+      if (!t) return null;
+      const invisibleActive = (t.invisibleUntil || 0) > now;
+      const hiddenFromViewer = invisibleActive && viewerSlot !== t.slot && t.alive !== false;
+      return {
+        slot: t.slot,
+        name: t.name,
+        connected: t.connected,
+        // 透明化中は、本人以外には位置・向き・戦車本体を見せません。
+        x: hiddenFromViewer ? null : t.x,
+        y: hiddenFromViewer ? null : t.y,
+        angle: hiddenFromViewer ? 0 : t.angle,
+        hiddenFromViewer,
+        hold: hiddenFromViewer ? false : t.hold,
+        charge: viewerSlot === t.slot ? t.charge : 0,
+        score: t.score,
+        color: t.color,
+        alive: t.alive !== false,
+        effects: hiddenFromViewer ? [] : activeEffectsForPublic(t, now),
+        shield: false,
+        giant: hiddenFromViewer ? false : (t.giantUntil || 0) > now,
+        invisible: viewerSlot === t.slot && invisibleActive,
+        lastItem: viewerSlot === t.slot ? (t.lastItem || '') : '',
+      };
+    }),
     bullets: room.bullets,
     roundResetUntil: room.roundResetUntil,
     message: room.message,
@@ -630,7 +643,12 @@ function cryptoToken() {
 }
 
 function emitRoom(room) {
-  io.to(room.code).emit('state', publicState(room));
+  // 透明化のため、各プレイヤーに見せる状態を個別に生成します。
+  for (const tank of room.tanks || []) {
+    if (tank && tank.socketId) {
+      io.to(tank.socketId).emit('state', publicState(room, tank.slot));
+    }
+  }
 }
 
 function distancePointToSegment(px, py, x1, y1, x2, y2) {
@@ -923,9 +941,12 @@ function updateRoom(room, dt) {
       const dx = tank.x - bullet.x;
       const dy = tank.y - bullet.y;
       if (Math.hypot(dx, dy) <= tankRadius(tank) + bulletRadius(bullet)) {
+        hit = true;
+        // 敵・自分を問わず、戦車に当たった弾はその場で消滅します。
         if (room.gameMode === 'survival') {
           eliminateTank(room, tank, tank.slot === bullet.owner ? 'self' : 'hit');
-          return;
+          if (room.status !== 'playing' || Date.now() < room.roundResetUntil) return;
+          break;
         }
         const scorerSlots = tank.slot === bullet.owner
           ? room.tanks.filter((other) => other && other.slot !== bullet.owner).map((other) => other.slot)
