@@ -751,7 +751,7 @@ function fireBullet(room, tank) {
   const now = Date.now();
   const big = (tank.bigBulletUntil || 0) > now;
   const fast = (tank.fastBulletUntil || 0) > now;
-  const radius = big ? BULLET_RADIUS * 1.85 : BULLET_RADIUS;
+  const radius = big ? BULLET_RADIUS * 2.8 : BULLET_RADIUS;
   const speed = fast ? BULLET_SPEED * 1.45 : BULLET_SPEED;
   const muzzle = tankRadius(tank) + radius + 8;
 
