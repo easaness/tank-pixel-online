@@ -328,7 +328,9 @@ function updateRoom(room, dt) {
         tank.charge += dt;
       } else {
         bumpTankBack(room, tank);
-        tank.charge = 0;
+        // 長押し中は、壁や敵にぶつかって押し戻されてもチャージを維持します。
+        // チャージはボタンを離したとき、発射したとき、得点リセット時だけリセットします。
+        tank.charge += dt;
       }
 
       if (tank.charge >= CHARGE_TIME) {
