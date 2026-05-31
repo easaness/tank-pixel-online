@@ -22,6 +22,8 @@ const CHARGE_TIME = 2;
 const WIN_SCORE = 5;
 const BROADCAST_HZ = 30;
 const OBSTACLE_HALF_WIDTH = 7;
+const BUMP_BACK_DISTANCE = 10;
+const BUMP_COOLDOWN = 0.12;
 const OBSTACLES = [
   { id: 'centerLine', x1: 480, y1: 170, x2: 480, y2: 370 },
   { id: 'leftLine', x1: 210, y1: 150, x2: 360, y2: 150 },
@@ -52,6 +54,7 @@ function makeTank(slot, name, socketId, token) {
     angle: left ? 0 : Math.PI,
     hold: false,
     charge: 0,
+    bumpCooldown: 0,
     score: 0,
     color: left ? '#38bdf8' : '#fb7185',
   };
@@ -66,6 +69,7 @@ function resetPositions(room) {
     tank.angle = left ? 0 : Math.PI;
     tank.hold = false;
     tank.charge = 0;
+    tank.bumpCooldown = 0;
   });
   room.bullets = [];
   room.roundResetUntil = Date.now() + 700;
@@ -211,6 +215,27 @@ function tankCanMove(room, tank, nextX, nextY) {
   return true;
 }
 
+
+function bumpTankBack(room, tank) {
+  if (tank.bumpCooldown > 0) return;
+
+  const backX = -Math.cos(tank.angle);
+  const backY = -Math.sin(tank.angle);
+  const distances = [BUMP_BACK_DISTANCE, 7, 4, 2];
+
+  for (const distance of distances) {
+    const candidateX = tank.x + backX * distance;
+    const candidateY = tank.y + backY * distance;
+    if (tankCanMove(room, tank, candidateX, candidateY)) {
+      tank.x = candidateX;
+      tank.y = candidateY;
+      break;
+    }
+  }
+
+  tank.bumpCooldown = BUMP_COOLDOWN;
+}
+
 function reflectBulletOnObstacle(bullet, prevX, prevY, line) {
   if (!circleLineHit(bullet.x, bullet.y, BULLET_RADIUS, line)) return false;
 
@@ -290,14 +315,22 @@ function updateRoom(room, dt) {
 
   for (const tank of room.tanks) {
     if (!tank) continue;
+    tank.bumpCooldown = Math.max(0, (tank.bumpCooldown || 0) - dt);
+
     if (tank.hold) {
       const nextX = tank.x + Math.cos(tank.angle) * TANK_SPEED * dt;
       const nextY = tank.y + Math.sin(tank.angle) * TANK_SPEED * dt;
-      if (tankCanMove(room, tank, nextX, nextY)) {
+      const canMove = tankCanMove(room, tank, nextX, nextY);
+
+      if (canMove) {
         tank.x = nextX;
         tank.y = nextY;
+        tank.charge += dt;
+      } else {
+        bumpTankBack(room, tank);
+        tank.charge = 0;
       }
-      tank.charge += dt;
+
       if (tank.charge >= CHARGE_TIME) {
         fireBullet(room, tank);
         tank.charge = 0;
