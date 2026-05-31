@@ -171,9 +171,23 @@ function randomEffectType() {
   return ITEM_EFFECT_TYPES[Math.floor(Math.random() * ITEM_EFFECT_TYPES.length)];
 }
 
-function randomItem() {
-  // 各通常アイテム + ？アイテムが同じくらいの頻度で出る
-  const type = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
+function shuffledItemBag() {
+  const bag = [...ITEM_TYPES];
+  for (let i = bag.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+  return bag;
+}
+
+function randomItem(room) {
+  // 完全ランダムだと「回転」が長時間出ないことがあるため、
+  // 全種類が一巡する抽選袋方式にします。
+  // 通常アイテム + ？アイテムは同じ頻度で必ず出ます。
+  if (!room.itemBag || room.itemBag.length === 0) {
+    room.itemBag = shuffledItemBag();
+  }
+  const type = room.itemBag.pop();
   if (type === 'random') return { type, hidden: true };
   return { type, hidden: false };
 }
@@ -214,7 +228,7 @@ function spawnRandomItem(room, force = false) {
     const x = Math.round(randomBetween(90, AREA.w - 90));
     const y = Math.round(randomBetween(80, AREA.h - 80));
     if (!isItemPositionSafe(room, x, y)) continue;
-    room.items.push({ id: cryptoToken(), x, y, ...randomItem() });
+    room.items.push({ id: cryptoToken(), x, y, ...randomItem(room) });
     room.nextItemAt = now + ITEM_SPAWN_INTERVAL_MS;
     return;
   }
@@ -224,6 +238,7 @@ function spawnRandomItem(room, force = false) {
 
 function resetItems(room) {
   room.items = [];
+  room.itemBag = shuffledItemBag();
   const now = Date.now();
   room.nextItemAt = now;
   // 初期盤面には必ず最大3個のアイテムを配置します。
