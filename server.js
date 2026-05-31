@@ -1,6 +1,8 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -9,8 +11,12 @@ const io = new Server(server, {
 });
 
 app.use(express.static('public'));
+app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size, loadedFromDisk }));
 
 const PORT = process.env.PORT || 3000;
+const SAVE_DIR = process.env.TANK_PIXEL_SAVE_DIR || path.join(__dirname, 'data');
+const SAVE_FILE = path.join(SAVE_DIR, 'rooms.json');
+const ROOM_TTL_MS = 1000 * 60 * 60 * 6; // 全員が退出しても6時間は部屋を保持
 
 const AREA = { w: 960, h: 540 };
 const TANK_RADIUS = 18;
@@ -124,7 +130,96 @@ function generateObstacles() {
   return obstacles;
 }
 
+
 const rooms = new Map();
+let saveTimer = null;
+let loadedFromDisk = false;
+
+function cloneRoomForSave(room) {
+  return {
+    code: room.code,
+    status: room.status,
+    maxPlayers: room.maxPlayers || 2,
+    bullets: room.bullets || [],
+    winnerSlot: room.winnerSlot ?? null,
+    winnerSlots: room.winnerSlots || [],
+    message: room.message || '',
+    lastTick: Date.now(),
+    lastTouched: room.lastTouched || Date.now(),
+    roundResetUntil: room.roundResetUntil || 0,
+    obstacles: room.obstacles || [],
+    tanks: (room.tanks || []).map((tank) => tank && ({
+      slot: tank.slot,
+      name: tank.name,
+      socketId: '',
+      token: tank.token,
+      connected: false,
+      x: tank.x,
+      y: tank.y,
+      angle: tank.angle,
+      hold: false,
+      charge: tank.charge || 0,
+      bumpCooldown: tank.bumpCooldown || 0,
+      score: tank.score || 0,
+      color: tank.color,
+    })),
+  };
+}
+
+function saveRoomsNow() {
+  try {
+    fs.mkdirSync(SAVE_DIR, { recursive: true });
+    const payload = {
+      savedAt: Date.now(),
+      rooms: Array.from(rooms.values()).map(cloneRoomForSave),
+    };
+    fs.writeFileSync(SAVE_FILE, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.error('Failed to save rooms:', error);
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveRoomsNow();
+  }, 350);
+}
+
+function touchRoom(room) {
+  if (!room) return;
+  room.lastTouched = Date.now();
+  scheduleSave();
+}
+
+function loadRoomsFromDisk() {
+  try {
+    if (!fs.existsSync(SAVE_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+    const now = Date.now();
+    for (const rawRoom of parsed.rooms || []) {
+      if (!rawRoom || !rawRoom.code) continue;
+      if (now - (rawRoom.lastTouched || parsed.savedAt || now) > ROOM_TTL_MS) continue;
+      rawRoom.tanks = (rawRoom.tanks || []).map((tank) => tank && ({
+        ...tank,
+        socketId: '',
+        connected: false,
+        hold: false,
+        charge: tank.charge || 0,
+        bumpCooldown: 0,
+      }));
+      rawRoom.lastTick = now;
+      rawRoom.message = 'サーバー再起動後の部屋を復元しました。各プレイヤーは再接続してください。';
+      rooms.set(rawRoom.code, rawRoom);
+    }
+    loadedFromDisk = rooms.size > 0;
+    if (loadedFromDisk) console.log(`Loaded ${rooms.size} room(s) from ${SAVE_FILE}`);
+  } catch (error) {
+    console.error('Failed to load rooms:', error);
+  }
+}
+
 
 function roomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -223,6 +318,7 @@ function createRoom(hostName, socket, playerCount = 2) {
     obstacles: generateObstacles(),
   };
   rooms.set(code, room);
+  touchRoom(room);
   socket.join(code);
   socket.data.roomCode = code;
   socket.data.slot = 0;
@@ -239,7 +335,7 @@ function joinRoom(code, name, socket, token) {
   code = String(code || '').trim().toUpperCase();
   const room = rooms.get(code);
   if (!room) {
-    socket.emit('errorMessage', '部屋が見つかりません。');
+    socket.emit('errorMessage', '部屋が見つかりません。サーバーが再起動した可能性があります。部屋主が残っていれば同じ部屋IDで復元される場合がありますが、復元できない場合は新しい部屋を作ってください。');
     return;
   }
 
@@ -268,6 +364,7 @@ function joinRoom(code, name, socket, token) {
   socket.data.roomCode = code;
   socket.data.slot = slot;
   socket.data.token = room.tanks[slot].token;
+  touchRoom(room);
   socket.emit('joined', { code, slot, token: room.tanks[slot].token });
 
   const count = joinedCount(room);
@@ -289,6 +386,7 @@ function startMatch(room) {
   });
   resetPositions(room);
   room.message = `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
+  touchRoom(room);
 }
 
 function cryptoToken() {
@@ -432,6 +530,7 @@ function scorePoint(room, scorerSlots) {
     room.message = `${scorers.map((tank) => tank.name).join('・')} が1ポイント！初期配置に戻ります。`;
     resetPositions(room);
   }
+  touchRoom(room);
 }
 
 function updateRoom(room, dt) {
@@ -537,6 +636,7 @@ io.on('connection', (socket) => {
     if (!tank || tank.token !== socket.data.token) return;
     tank.hold = !!hold;
     if (!tank.hold) tank.charge = 0;
+    touchRoom(room);
   });
 
   socket.on('restart', () => {
@@ -550,6 +650,7 @@ io.on('connection', (socket) => {
     } else {
       startMatch(room);
     }
+    touchRoom(room);
     emitRoom(room);
   });
 
@@ -564,12 +665,8 @@ io.on('connection', (socket) => {
       room.message = `${tank.name} が切断しました。再接続を待っています。`;
       emitRoom(room);
     }
-    setTimeout(() => {
-      const r = rooms.get(socket.data.roomCode);
-      if (!r) return;
-      const active = r.tanks.some((t) => t && t.connected);
-      if (!active) rooms.delete(r.code);
-    }, 1000 * 60 * 20);
+    touchRoom(room);
+    // すぐには部屋を消さず、サーバー再起動や一時切断から戻れる余地を残します。
   });
 });
 
@@ -585,5 +682,34 @@ setInterval(() => {
 setInterval(() => {
   for (const room of rooms.values()) emitRoom(room);
 }, 1000 / BROADCAST_HZ);
+
+setInterval(() => {
+  saveRoomsNow();
+}, 1000 * 5);
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms.entries()) {
+    const hasActive = (room.tanks || []).some((tank) => tank && tank.connected);
+    if (!hasActive && now - (room.lastTouched || now) > ROOM_TTL_MS) rooms.delete(code);
+  }
+  saveRoomsNow();
+}, 1000 * 60);
+
+process.on('SIGTERM', () => {
+  saveRoomsNow();
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  saveRoomsNow();
+  process.exit(0);
+});
+process.on('uncaughtException', (error) => {
+  console.error(error);
+  saveRoomsNow();
+  process.exit(1);
+});
+
+loadRoomsFromDisk();
 
 server.listen(PORT, () => console.log(`Tank Pixel server running on ${PORT}`));

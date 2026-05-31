@@ -207,6 +207,20 @@
       location.reload();
     };
 
+    socket.on('connect', () => {
+      savedCode = localStorage.getItem('tankPixelRoom') || savedCode;
+      token = localStorage.getItem('tankPixelToken') || token;
+      if (savedCode && token && !state) {
+        socket.emit('joinRoom', { code: savedCode, name: '', token });
+      }
+    });
+    socket.on('disconnect', () => {
+      if (state) $('statusText').textContent = '通信が切れました。自動再接続中です...';
+    });
+    socket.on('connect_error', () => {
+      if (state) $('statusText').textContent = 'サーバーに接続できません。再接続を試しています...';
+    });
+
     socket.on('joined', ({ code, slot, token: nextToken }) => {
       mySlot = slot;
       token = nextToken;
@@ -215,7 +229,10 @@
       localStorage.setItem('tankPixelRoom', code);
       showGame();
     });
-    socket.on('errorMessage', showStartError);
+    socket.on('errorMessage', (message) => {
+      if (state) $('statusText').textContent = message;
+      showStartError(message);
+    });
     socket.on('state', (next) => {
       const wasFinished = state?.status === 'finished';
       state = next;
