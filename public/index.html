@@ -161,7 +161,7 @@
       <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、2秒で弾を発射します。</div>
       <div class="rule"><strong>反射</strong>弾は外壁・直線障害物で反射し、5回反射すると消えます。</div>
       <div class="rule"><strong>勝利</strong>誰かに弾が当たると発射者が得点。自分に当てると他プレイヤーが得点。5点先取で勝利です。</div>
-      <div class="rule"><strong>EXTRA</strong>速度UP・回転速度UP・チャージ短縮・敵巨大化・透明化アイテムが出現します。同じ効果を重ねて拾うと、残り効果時間に加算されます。</div>
+      <div class="rule"><strong>EXTRA</strong>速度UP・回転速度UP・チャージ短縮・敵巨大化・透明化アイテムが出現します。透明化中は本人には半透明、相手には完全非表示になります。同じ効果を重ねて拾うと、残り効果時間に加算されます。</div>
     </section>
 
     <div class="btn-row" style="justify-content:center; margin-top:14px">
@@ -443,9 +443,10 @@
     function drawTanks() {
       (state.tanks || []).forEach((tank) => {
         if (!tank) return;
-        ctx.save();
         const isInvisible = tank.invisibleUntil && tank.invisibleUntil > Date.now();
-        if (isInvisible) ctx.globalAlpha = tank.slot === mySlot ? 0.55 : 0.28;
+        if (isInvisible && tank.slot !== mySlot) return;
+        ctx.save();
+        if (isInvisible && tank.slot === mySlot) ctx.globalAlpha = 0.55;
         const radius = tank.radius || 18;
         ctx.translate(tank.x, tank.y);
         ctx.rotate(tank.angle);
