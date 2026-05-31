@@ -14,6 +14,8 @@
       --muted: #94a3b8;
       --p1: #38bdf8;
       --p2: #fb7185;
+      --p3: #4ade80;
+      --p4: #a78bfa;
       --accent: #facc15;
     }
 
@@ -47,7 +49,7 @@
     .title { text-align: center; font-weight: 1000; font-size: 28px; letter-spacing: .08em; }
     .status { justify-self: end; border: 1px solid var(--line); background: var(--panel); border-radius: 18px; padding: 10px 14px; color: var(--muted); max-width: 360px; }
 
-    .scoreboard { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .scoreboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); align-items: stretch; gap: 12px; margin-bottom: 12px; }
     .player-card { border: 1px solid var(--line); background: var(--panel); border-radius: 22px; padding: 14px; display: grid; gap: 8px; }
     .player-card.mine { outline: 3px solid rgba(250,204,21,.28); }
     .p-name { display: flex; justify-content: space-between; gap: 12px; font-weight: 1000; font-size: 18px; }
@@ -55,6 +57,8 @@
     .dot { width: 22px; height: 22px; border-radius: 8px; background: rgba(148,163,184,.18); border: 1px solid rgba(148,163,184,.32); }
     .dot.on.p1 { background: var(--p1); box-shadow: 0 0 18px rgba(56,189,248,.45); }
     .dot.on.p2 { background: var(--p2); box-shadow: 0 0 18px rgba(251,113,133,.45); }
+    .dot.on.p3 { background: var(--p3); box-shadow: 0 0 18px rgba(74,222,128,.45); }
+    .dot.on.p4 { background: var(--p4); box-shadow: 0 0 18px rgba(167,139,250,.45); }
     .versus { color: var(--accent); font-weight: 1000; font-size: 20px; }
 
     .arena-wrap { position: relative; border: 1px solid var(--line); border-radius: 28px; padding: 14px; background: linear-gradient(180deg, rgba(15,23,42,.92), rgba(2,6,23,.92)); box-shadow: 0 20px 70px rgba(0,0,0,.35); }
@@ -92,10 +96,16 @@
   <section class="start-screen screen" id="startScreen">
     <div class="hero">
       <h1 class="logo">TANK <span>PIXEL</span></h1>
-      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。直線の障害物も使って戦う5点先取の1対1オンライン対戦です。</p>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。直線の障害物も使って戦う5点先取の2〜4人オンライン対戦です。</p>
       <div class="start-grid">
         <div class="card">
           <h2>部屋を作る</h2>
+          <label>プレイヤー人数</label>
+          <select id="playerCount" style="width:100%;border:1px solid var(--line);border-radius:16px;padding:13px 14px;background:rgba(2,6,23,.88);color:var(--text);font-size:16px">
+            <option value="2">2人</option>
+            <option value="3">3人</option>
+            <option value="4">4人</option>
+          </select>
           <label>あなたの名前</label>
           <input id="createName" maxlength="14" placeholder="プレイヤー1" />
           <div class="btn-row"><button id="createBtn">部屋を作る</button></div>
@@ -121,11 +131,7 @@
       <div class="status" id="statusText">接続中...</div>
     </div>
 
-    <section class="scoreboard">
-      <div class="player-card" id="p0Card"><div class="p-name"><span id="p0Name">P1</span><span id="p0Conn">-</span></div><div class="score-dots" id="p0Score"></div></div>
-      <div class="versus">VS</div>
-      <div class="player-card" id="p1Card"><div class="p-name"><span id="p1Name">P2</span><span id="p1Conn">-</span></div><div class="score-dots" id="p1Score"></div></div>
-    </section>
+    <section class="scoreboard" id="scoreboard"></section>
 
     <section class="arena-wrap">
       <canvas id="gameCanvas" width="960" height="540"></canvas>
@@ -149,7 +155,7 @@
       <div class="rule"><strong>前進</strong>長押し中だけ回転が止まり、その方向へ進みます。</div>
       <div class="rule"><strong>発射</strong>前進中のみゲージが溜まり、2秒で弾を発射します。</div>
       <div class="rule"><strong>反射</strong>弾は外壁・直線障害物で反射し、5回反射すると消えます。</div>
-      <div class="rule"><strong>勝利</strong>相手か自分に弾が当たると得点処理。5点先取で勝利です。</div>
+      <div class="rule"><strong>勝利</strong>誰かに弾が当たると発射者が得点。自分に当てると他プレイヤーが得点。5点先取で勝利です。</div>
     </section>
 
     <div class="btn-row" style="justify-content:center; margin-top:14px">
@@ -180,7 +186,7 @@
 
     $('createBtn').onclick = () => {
       showStartError('');
-      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1' });
+      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1', playerCount: Number($('playerCount').value || 2) });
     };
     $('joinBtn').onclick = () => {
       showStartError('');
@@ -214,7 +220,13 @@
       const wasFinished = state?.status === 'finished';
       state = next;
       renderUI();
-      if (!wasFinished && state.status === 'finished') showOverlay('WINNER', `${state.tanks[state.winnerSlot]?.name || '勝者'} の勝利！`, true);
+      if (!wasFinished && state.status === 'finished') {
+        const names = (state.winnerSlots && state.winnerSlots.length ? state.winnerSlots : [state.winnerSlot])
+          .map((slot) => state.tanks[slot]?.name)
+          .filter(Boolean)
+          .join('・');
+        showOverlay('WINNER', `${names || '勝者'} の勝利！`, true);
+      }
       else if (state.status !== 'finished') hideOverlay();
     });
 
@@ -236,14 +248,17 @@
       if (!state) return;
       $('roomCode').textContent = state.code;
       $('statusText').textContent = state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中');
-      for (let i = 0; i < 2; i++) {
+      const maxPlayers = state.maxPlayers || state.tanks.length || 2;
+      $('scoreboard').innerHTML = Array.from({ length: maxPlayers }, (_, i) => {
         const tank = state.tanks[i];
-        $(`p${i}Card`).classList.toggle('mine', i === mySlot);
-        $(`p${i}Name`).textContent = tank?.name || `P${i+1}`;
-        $(`p${i}Conn`).textContent = tank?.connected ? 'ONLINE' : 'OFFLINE';
-        $(`p${i}Conn`).style.color = tank?.connected ? '#86efac' : '#fca5a5';
-        $(`p${i}Score`).innerHTML = Array.from({ length: state.winScore }, (_, n) => `<span class="dot ${n < (tank?.score || 0) ? 'on p'+(i+1) : ''}"></span>`).join('');
-      }
+        const connectedText = tank ? (tank.connected ? 'ONLINE' : 'OFFLINE') : 'WAITING';
+        const connectedColor = tank ? (tank.connected ? '#86efac' : '#fca5a5') : '#94a3b8';
+        const dots = Array.from({ length: state.winScore }, (_, n) => `<span class="dot ${n < (tank?.score || 0) ? 'on p'+(i+1) : ''}"></span>`).join('');
+        return `<div class="player-card ${i === mySlot ? 'mine' : ''}">
+          <div class="p-name"><span style="color:${tank?.color || '#94a3b8'}">${tank?.name || `P${i+1}`}</span><span style="color:${connectedColor}">${connectedText}</span></div>
+          <div class="score-dots">${dots}</div>
+        </div>`;
+      }).join('');
       const mine = state.tanks[mySlot];
       const charge = mine?.charge || 0;
       const chargeTime = state.chargeTime || 2;

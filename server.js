@@ -27,9 +27,13 @@ const SPAWN_SAFE_RADIUS = 135;
 const BUMP_BACK_DISTANCE = 10;
 const BUMP_COOLDOWN = 0.12;
 const SPAWNS = [
-  { x: 160, y: AREA.h / 2 },
-  { x: AREA.w - 160, y: AREA.h / 2 },
+  { x: 150, y: AREA.h / 2, angle: 0 },
+  { x: AREA.w - 150, y: AREA.h / 2, angle: Math.PI },
+  { x: AREA.w / 2, y: 115, angle: Math.PI / 2 },
+  { x: AREA.w / 2, y: AREA.h - 115, angle: -Math.PI / 2 },
 ];
+
+const PLAYER_COLORS = ['#38bdf8', '#fb7185', '#4ade80', '#a78bfa'];
 
 function randomBetween(min, max) {
   return min + Math.random() * (max - min);
@@ -132,21 +136,21 @@ function roomCode() {
 }
 
 function makeTank(slot, name, socketId, token) {
-  const left = slot === 0;
+  const spawn = SPAWNS[slot];
   return {
     slot,
     name: name || `P${slot + 1}`,
     socketId,
     token,
     connected: true,
-    x: SPAWNS[slot].x,
-    y: SPAWNS[slot].y,
-    angle: left ? 0 : Math.PI,
+    x: spawn.x,
+    y: spawn.y,
+    angle: spawn.angle,
     hold: false,
     charge: 0,
     bumpCooldown: 0,
     score: 0,
-    color: left ? '#38bdf8' : '#fb7185',
+    color: PLAYER_COLORS[slot] || '#facc15',
   };
 }
 
@@ -155,7 +159,7 @@ function resetPositions(room) {
     if (!tank) return;
     tank.x = SPAWNS[tank.slot].x;
     tank.y = SPAWNS[tank.slot].y;
-    tank.angle = tank.slot === 0 ? 0 : Math.PI;
+    tank.angle = SPAWNS[tank.slot].angle;
     tank.hold = false;
     tank.charge = 0;
     tank.bumpCooldown = 0;
@@ -169,7 +173,9 @@ function publicState(room) {
     code: room.code,
     area: AREA,
     status: room.status,
+    maxPlayers: room.maxPlayers || 2,
     winnerSlot: room.winnerSlot,
+    winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
     chargeTime: CHARGE_TIME,
     obstacles: room.obstacles || [],
@@ -191,16 +197,27 @@ function publicState(room) {
   };
 }
 
-function createRoom(hostName, socket) {
+function normalizePlayerCount(value) {
+  const count = Number(value);
+  if (![2, 3, 4].includes(count)) return 2;
+  return count;
+}
+
+function createRoom(hostName, socket, playerCount = 2) {
   const code = roomCode();
   const token = cryptoToken();
+  const maxPlayers = normalizePlayerCount(playerCount);
+  const tanks = Array.from({ length: maxPlayers }, () => null);
+  tanks[0] = makeTank(0, hostName, socket.id, token);
   const room = {
     code,
     status: 'waiting',
-    tanks: [makeTank(0, hostName, socket.id, token), null],
+    maxPlayers,
+    tanks,
     bullets: [],
     winnerSlot: null,
-    message: '相手の参加を待っています。',
+    winnerSlots: [],
+    message: `参加者を待っています。1/${maxPlayers}人`,
     lastTick: Date.now(),
     roundResetUntil: 0,
     obstacles: generateObstacles(),
@@ -212,6 +229,10 @@ function createRoom(hostName, socket) {
   socket.data.token = token;
   socket.emit('joined', { code, slot: 0, token });
   emitRoom(room);
+}
+
+function joinedCount(room) {
+  return room.tanks.filter(Boolean).length;
 }
 
 function joinRoom(code, name, socket, token) {
@@ -249,8 +270,11 @@ function joinRoom(code, name, socket, token) {
   socket.data.token = room.tanks[slot].token;
   socket.emit('joined', { code, slot, token: room.tanks[slot].token });
 
-  if (room.tanks[0] && room.tanks[1] && room.status === 'waiting') {
+  const count = joinedCount(room);
+  if (count >= room.maxPlayers && room.status === 'waiting') {
     startMatch(room);
+  } else if (room.status === 'waiting') {
+    room.message = `参加者を待っています。${count}/${room.maxPlayers}人`;
   }
   emitRoom(room);
 }
@@ -258,12 +282,13 @@ function joinRoom(code, name, socket, token) {
 function startMatch(room) {
   room.status = 'playing';
   room.winnerSlot = null;
+  room.winnerSlots = [];
   room.obstacles = generateObstacles();
   room.tanks.forEach((tank) => {
     if (tank) tank.score = 0;
   });
   resetPositions(room);
-  room.message = 'ゲーム開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。';
+  room.message = `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
 }
 
 function cryptoToken() {
@@ -378,14 +403,24 @@ function fireBullet(room, tank) {
   });
 }
 
-function scorePoint(room, scorerSlot) {
-  const scorer = room.tanks[scorerSlot];
-  if (!scorer || room.status !== 'playing') return;
-  scorer.score += 1;
-  if (scorer.score >= WIN_SCORE) {
+function scorePoint(room, scorerSlots) {
+  if (room.status !== 'playing') return;
+  const slots = Array.isArray(scorerSlots) ? scorerSlots : [scorerSlots];
+  const scorers = slots
+    .map((slot) => room.tanks[slot])
+    .filter(Boolean);
+  if (!scorers.length) return;
+
+  scorers.forEach((scorer) => { scorer.score += 1; });
+
+  const winners = room.tanks.filter((tank) => tank && tank.score >= WIN_SCORE);
+  if (winners.length) {
+    const maxScore = Math.max(...winners.map((tank) => tank.score));
+    const finalWinners = winners.filter((tank) => tank.score === maxScore);
     room.status = 'finished';
-    room.winnerSlot = scorerSlot;
-    room.message = `${scorer.name} の勝利！`;
+    room.winnerSlot = finalWinners[0].slot;
+    room.winnerSlots = finalWinners.map((tank) => tank.slot);
+    room.message = `${finalWinners.map((tank) => tank.name).join('・')} の勝利！`;
     room.bullets = [];
     room.tanks.forEach((tank) => {
       if (tank) {
@@ -394,14 +429,14 @@ function scorePoint(room, scorerSlot) {
       }
     });
   } else {
-    room.message = `${scorer.name} が1ポイント！初期配置に戻ります。`;
+    room.message = `${scorers.map((tank) => tank.name).join('・')} が1ポイント！初期配置に戻ります。`;
     resetPositions(room);
   }
 }
 
 function updateRoom(room, dt) {
   if (room.status !== 'playing') return;
-  if (!room.tanks[0] || !room.tanks[1]) return;
+  if (room.tanks.filter(Boolean).length < (room.maxPlayers || 2)) return;
   if (Date.now() < room.roundResetUntil) return;
 
   for (const tank of room.tanks) {
@@ -479,8 +514,10 @@ function updateRoom(room, dt) {
       const dx = tank.x - bullet.x;
       const dy = tank.y - bullet.y;
       if (Math.hypot(dx, dy) <= TANK_RADIUS + BULLET_RADIUS) {
-        const scorerSlot = tank.slot === bullet.owner ? 1 - bullet.owner : bullet.owner;
-        scorePoint(room, scorerSlot);
+        const scorerSlots = tank.slot === bullet.owner
+          ? room.tanks.filter((other) => other && other.slot !== bullet.owner).map((other) => other.slot)
+          : [bullet.owner];
+        scorePoint(room, scorerSlots);
         return; // 得点・リセット時はフィールド上の弾をすべて消した状態を保つ
       }
     }
@@ -490,7 +527,7 @@ function updateRoom(room, dt) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name }) => createRoom(name, socket));
+  socket.on('createRoom', ({ name, playerCount }) => createRoom(name, socket, playerCount));
   socket.on('joinRoom', ({ code, name, token }) => joinRoom(code, name, socket, token));
 
   socket.on('setHold', ({ hold }) => {
@@ -505,11 +542,11 @@ io.on('connection', (socket) => {
   socket.on('restart', () => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
-    if (![0, 1].includes(socket.data.slot)) return;
+    if (socket.data.slot == null) return;
     if (room.status !== 'finished' && socket.data.slot !== 0) return;
-    if (!room.tanks[0] || !room.tanks[1]) {
+    if (room.tanks.filter(Boolean).length < (room.maxPlayers || 2)) {
       room.status = 'waiting';
-      room.message = '相手の参加を待っています。';
+      room.message = `参加者を待っています。${joinedCount(room)}/${room.maxPlayers || 2}人`;
     } else {
       startMatch(room);
     }

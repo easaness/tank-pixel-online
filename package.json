@@ -1,7 +1,7 @@
 {
   "name": "tank-pixel-online",
   "version": "1.0.0",
-  "description": "1v1 online rotating tank duel game",
+  "description": "2-4 player online rotating tank duel game",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
