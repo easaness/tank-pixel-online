@@ -100,7 +100,7 @@
   <section class="start-screen screen" id="startScreen">
     <div class="hero">
       <h1 class="logo">TANK <span>PIXEL</span></h1>
-      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。通常アイテムに加えて、取るまで効果が分からない？アイテムも出現します。</p>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。部屋作成時にアイテムあり / なしを選べます。アイテムありでは通常アイテムに加えて、取るまで効果が分からない？アイテムも出現します。</p>
       <div class="start-grid">
         <div class="card">
           <h2>部屋を作る</h2>
@@ -114,6 +114,11 @@
           <select id="gameMode" style="width:100%;border:1px solid var(--line);border-radius:16px;padding:13px 14px;background:rgba(2,6,23,.88);color:var(--text);font-size:16px">
             <option value="score">通常：当てたら得点</option>
             <option value="survival">サバイバル：最後の1人が得点</option>
+          </select>
+          <label>アイテム</label>
+          <select id="itemMode" style="width:100%;border:1px solid var(--line);border-radius:16px;padding:13px 14px;background:rgba(2,6,23,.88);color:var(--text);font-size:16px">
+            <option value="on">アイテムあり</option>
+            <option value="off">アイテムなし</option>
           </select>
           <label>あなたの名前</label>
           <input id="createName" maxlength="14" placeholder="プレイヤー1" />
@@ -197,7 +202,7 @@
 
     $('createBtn').onclick = () => {
       showStartError('');
-      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1', playerCount: Number($('playerCount').value || 2), gameMode: $('gameMode').value });
+      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1', playerCount: Number($('playerCount').value || 2), gameMode: $('gameMode').value, itemMode: $('itemMode').value });
     };
     $('joinBtn').onclick = () => {
       showStartError('');
@@ -275,7 +280,7 @@
     function renderUI() {
       if (!state) return;
       $('roomCode').textContent = state.code;
-      $('statusText').textContent = `${state.gameMode === 'survival' ? 'サバイバル' : '通常'}｜アイテム${state.items?.length || 0}個｜${state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中')}`;
+      $('statusText').textContent = `${state.gameMode === 'survival' ? 'サバイバル' : '通常'}｜${state.itemMode === 'off' ? 'アイテムなし' : `アイテム${state.items?.length || 0}個`}｜${state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中')}`;
       const maxPlayers = state.maxPlayers || state.tanks.length || 2;
       $('scoreboard').innerHTML = Array.from({ length: maxPlayers }, (_, i) => {
         const tank = state.tanks[i];
