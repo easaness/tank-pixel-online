@@ -216,11 +216,6 @@ function isItemPositionSafe(room, x, y) {
 }
 
 function spawnRandomItem(room, force = false) {
-  if (room.itemMode === 'off') {
-    room.items = [];
-    room.nextItemAt = 0;
-    return;
-  }
   room.items = room.items || [];
   const now = Date.now();
   if (!force && now < (room.nextItemAt || 0)) return;
@@ -244,10 +239,6 @@ function spawnRandomItem(room, force = false) {
 function resetItems(room) {
   room.items = [];
   room.itemBag = shuffledItemBag();
-  if (room.itemMode === 'off') {
-    room.nextItemAt = 0;
-    return;
-  }
   const now = Date.now();
   room.nextItemAt = now;
   // 初期盤面には必ず最大3個のアイテムを配置します。
@@ -336,7 +327,6 @@ function applyItemEffect(room, tank, item) {
 }
 
 function checkItemPickup(room, tank) {
-  if (room.itemMode === 'off') return;
   if (!room.items || !room.items.length || tank.alive === false) return;
   const remaining = [];
   for (const item of room.items) {
@@ -360,7 +350,6 @@ function cloneRoomForSave(room) {
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
     gameMode: room.gameMode || 'score',
-    itemMode: room.itemMode === 'off' ? 'off' : 'on',
     bullets: room.bullets || [],
     winnerSlot: room.winnerSlot ?? null,
     winnerSlots: room.winnerSlots || [],
@@ -452,11 +441,6 @@ function loadRoomsFromDisk() {
         fastBulletUntil: tank.fastBulletUntil || 0,
         lastItem: tank.lastItem || '',
       }));
-      rawRoom.itemMode = rawRoom.itemMode === 'off' ? 'off' : 'on';
-      if (rawRoom.itemMode === 'off') {
-        rawRoom.items = [];
-        rawRoom.nextItemAt = 0;
-      }
       rawRoom.lastTick = now;
       rawRoom.message = 'サーバー再起動後の部屋を復元しました。各プレイヤーは再接続してください。';
       rooms.set(rawRoom.code, rawRoom);
@@ -539,13 +523,12 @@ function publicState(room, viewerSlot = null) {
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
     gameMode: room.gameMode || 'score',
-    itemMode: room.itemMode === 'off' ? 'off' : 'on',
     winnerSlot: room.winnerSlot,
     winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
     chargeTime: effectiveChargeTime(room.tanks[viewerSlot], now),
     obstacles: room.obstacles || [],
-    items: room.itemMode === 'off' ? [] : (room.items || []).map(itemPublicState),
+    items: (room.items || []).map(itemPublicState),
     tanks: room.tanks.map((t) => {
       if (!t) return null;
       const invisibleActive = (t.invisibleUntil || 0) > now;
@@ -588,16 +571,11 @@ function normalizeGameMode(value) {
   return value === 'survival' ? 'survival' : 'score';
 }
 
-function normalizeItemMode(value) {
-  return value === 'off' ? 'off' : 'on';
-}
-
-function createRoom(hostName, socket, playerCount = 2, gameMode = 'score', itemMode = 'on') {
+function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
   const code = roomCode();
   const token = cryptoToken();
   const maxPlayers = normalizePlayerCount(playerCount);
   const normalizedMode = normalizeGameMode(gameMode);
-  const normalizedItemMode = normalizeItemMode(itemMode);
   const tanks = Array.from({ length: maxPlayers }, () => null);
   tanks[0] = makeTank(0, hostName, socket.id, token);
   const room = {
@@ -605,7 +583,6 @@ function createRoom(hostName, socket, playerCount = 2, gameMode = 'score', itemM
     status: 'waiting',
     maxPlayers,
     gameMode: normalizedMode,
-    itemMode: normalizedItemMode,
     tanks,
     bullets: [],
     winnerSlot: null,
@@ -615,7 +592,7 @@ function createRoom(hostName, socket, playerCount = 2, gameMode = 'score', itemM
     roundResetUntil: 0,
     obstacles: generateObstacles(),
     items: [],
-    nextItemAt: normalizedItemMode === 'off' ? 0 : Date.now() + 1800,
+    nextItemAt: Date.now() + 1800,
   };
   rooms.set(code, room);
   touchRoom(room);
@@ -686,10 +663,9 @@ function startMatch(room) {
   });
   resetPositions(room);
   resetItems(room);
-  const itemText = room.itemMode === 'off' ? 'アイテムなし' : 'アイテムあり';
   room.message = room.gameMode === 'survival'
-    ? `${room.maxPlayers}人サバイバル開始！最後まで生き残った1人が1ポイントです。${itemText}。`
-    : `${room.maxPlayers}人対戦開始！地形はランダム生成されました。${itemText}。長押しで前進、2秒チャージで弾を発射します。`;
+    ? `${room.maxPlayers}人サバイバル開始！最後まで生き残った1人が1ポイントです。`
+    : `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
   touchRoom(room);
 }
 
@@ -949,7 +925,7 @@ function updateRoom(room, dt) {
     }
   }
 
-  if (room.status === 'playing' && room.itemMode !== 'off') {
+  if (room.status === 'playing') {
     spawnRandomItem(room);
   }
 
@@ -1018,7 +994,7 @@ function updateRoom(room, dt) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, playerCount, gameMode, itemMode }) => createRoom(name, socket, playerCount, gameMode, itemMode));
+  socket.on('createRoom', ({ name, playerCount, gameMode }) => createRoom(name, socket, playerCount, gameMode));
   socket.on('joinRoom', ({ code, name, token }) => joinRoom(code, name, socket, token));
 
   socket.on('setHold', ({ hold }) => {
