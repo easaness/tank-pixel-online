@@ -46,9 +46,6 @@
 
     .game-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; margin-bottom: 14px; }
     .room-pill { justify-self: start; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 10px 14px; color: var(--muted); }
-    .invite-row { margin: 0 0 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 18px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
-    .invite-row label { margin: 0; white-space: nowrap; }
-    .invite-row input { padding: 10px 12px; border-radius: 12px; font-size: 14px; user-select: all; }
     .title { text-align: center; font-weight: 1000; font-size: 28px; letter-spacing: .08em; }
     .status { justify-self: end; border: 1px solid var(--line); background: var(--panel); border-radius: 18px; padding: 10px 14px; color: var(--muted); max-width: 360px; }
 
@@ -94,7 +91,6 @@
       .start-grid, .rules { grid-template-columns: 1fr; }
       .game-header, .scoreboard, .hud { grid-template-columns: 1fr; }
       .title, .room-pill, .status { justify-self: stretch; text-align: center; }
-      .invite-row { grid-template-columns: 1fr; text-align: center; }
       .versus { text-align: center; }
       .hold-button { width: 100%; }
     }
@@ -104,7 +100,7 @@
   <section class="start-screen screen" id="startScreen">
     <div class="hero">
       <h1 class="logo">TANK <span>PIXEL</span></h1>
-      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。通常アイテムに加えて、取るまで効果が分からない？アイテムも出現します。</p>
+      <p class="subtitle">戦車は常に回転。長押し中だけ回転を止めて前進し、2秒チャージで反射弾を発射。部屋作成時にアイテムあり／なしを選べます。</p>
       <div class="start-grid">
         <div class="card">
           <h2>部屋を作る</h2>
@@ -119,6 +115,11 @@
             <option value="score">通常：当てたら得点</option>
             <option value="survival">サバイバル：最後の1人が得点</option>
           </select>
+          <label>アイテム</label>
+          <select id="itemMode" style="width:100%;border:1px solid var(--line);border-radius:16px;padding:13px 14px;background:rgba(2,6,23,.88);color:var(--text);font-size:16px">
+            <option value="on">アイテムあり</option>
+            <option value="off">アイテムなし</option>
+          </select>
           <label>あなたの名前</label>
           <input id="createName" maxlength="14" placeholder="プレイヤー1" />
           <div class="btn-row"><button id="createBtn">部屋を作る</button></div>
@@ -128,7 +129,7 @@
           <label>あなたの名前</label>
           <input id="joinName" maxlength="14" placeholder="プレイヤー2" />
           <label>部屋ID</label>
-          <input id="roomCodeInput" maxlength="8" placeholder="ABCDE" />
+          <input id="roomCodeInput" placeholder="ABCDE または招待リンク" />
           <div class="btn-row"><button id="joinBtn">入室する</button></div>
         </div>
       </div>
@@ -144,11 +145,6 @@
       <div class="status" id="statusText">接続中...</div>
     </div>
 
-    <div class="invite-row">
-      <label for="inviteLink">招待リンク</label>
-      <input id="inviteLink" readonly value="" aria-label="招待リンク" />
-      <button class="secondary" id="copyInviteBtn">コピー</button>
-    </div>
 
     <section class="scoreboard" id="scoreboard"></section>
 
@@ -176,7 +172,7 @@
       <div class="rule"><strong>反射</strong>弾は外壁・直線障害物で反射し、5回反射すると消えます。</div>
       <div class="rule"><strong>通常</strong>誰かに弾が当たると発射者が得点。自分に当てると他プレイヤーが得点。</div>
       <div class="rule"><strong>サバイバル</strong>弾に当たると脱落。最後に生き残った1人が1点。5点先取で勝利です。</div>
-      <div class="rule"><strong>アイテム</strong>加速・短縮・巨大・透明・大弾・速弾がフィールドに文字で出ます。大弾中はかなり大きい弾を撃てます。？は取得時にランダムで発動します。</div>
+      <div class="rule"><strong>アイテム</strong>部屋作成時にあり／なしを選べます。ありの場合、加速・短縮・巨大・透明・大弾・速弾がフィールドに文字で出ます。？は取得時にランダムで発動します。</div>
     </section>
 
     <div class="btn-row" style="justify-content:center; margin-top:14px">
@@ -196,6 +192,8 @@
     let mySlot = null;
     let token = localStorage.getItem('tankPixelToken') || '';
     let savedCode = localStorage.getItem('tankPixelRoom') || '';
+    let savedSlot = Number(localStorage.getItem('tankPixelSlot') || -1);
+    let restoreAttempted = false;
     const params = new URLSearchParams(location.search);
     const inviteCode = (params.get('room') || params.get('code') || '').trim().toUpperCase();
     if (inviteCode) {
@@ -242,6 +240,46 @@
       $('statusText').textContent = successMessage;
     }
 
+    function playerNameFromState() {
+      return state?.tanks?.[mySlot]?.name || $('createName').value.trim() || $('joinName').value.trim() || '';
+    }
+
+    function saveBrowserBackup() {
+      if (!state || !savedCode || !token || mySlot == null) return;
+      const backup = {
+        version: 2,
+        savedAt: Date.now(),
+        code: savedCode,
+        slot: mySlot,
+        token,
+        name: playerNameFromState(),
+        state,
+      };
+      localStorage.setItem('tankPixelBackup', JSON.stringify(backup));
+    }
+
+    function loadBrowserBackup() {
+      try {
+        const backup = JSON.parse(localStorage.getItem('tankPixelBackup') || 'null');
+        if (!backup || !backup.code || !backup.token) return null;
+        if (Date.now() - (backup.savedAt || 0) > 1000 * 60 * 60 * 12) return null;
+        return backup;
+      } catch {
+        return null;
+      }
+    }
+
+    function tryRestoreFromBrowserBackup(missingCode = '') {
+      const backup = loadBrowserBackup();
+      if (!backup || restoreAttempted) return false;
+      if (missingCode && backup.code !== missingCode) return false;
+      restoreAttempted = true;
+      socket.emit('restoreRoom', { backup });
+      showStartError('部屋が見つからないため、ブラウザ内のバックアップから復旧しています...');
+      if (state) $('statusText').textContent = 'ブラウザ内のバックアップから復旧しています...';
+      return true;
+    }
+
     function showGame() {
       $('startScreen').classList.add('hidden');
       $('gameScreen').classList.remove('hidden');
@@ -250,7 +288,7 @@
 
     $('createBtn').onclick = () => {
       showStartError('');
-      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1', playerCount: Number($('playerCount').value || 2), gameMode: $('gameMode').value });
+      socket.emit('createRoom', { name: $('createName').value.trim() || 'プレイヤー1', playerCount: Number($('playerCount').value || 2), gameMode: $('gameMode').value, itemMode: $('itemMode').value });
     };
     $('joinBtn').onclick = () => {
       showStartError('');
@@ -258,25 +296,25 @@
     };
     $('reconnectBtn').onclick = () => {
       if (!savedCode || !token) return showStartError('再接続情報がありません。');
-      socket.emit('joinRoom', { code: savedCode, name: '', token });
+      socket.emit('joinRoom', { code: savedCode, name: '', token, preferredSlot: savedSlot });
     };
     $('copyBtn').onclick = () => copyText(inviteLink(), '招待リンクをコピーしました。');
-    $('copyInviteBtn').onclick = () => copyText($('inviteLink').value, '招待リンクをコピーしました。');
-    $('inviteLink').addEventListener('focus', (e) => e.target.select());
-    $('inviteLink').addEventListener('click', (e) => e.target.select());
     $('restartBtn').onclick = () => socket.emit('restart');
     $('centerRetryBtn').onclick = () => socket.emit('restart');
     $('clearBtn').onclick = () => {
       localStorage.removeItem('tankPixelToken');
       localStorage.removeItem('tankPixelRoom');
+      localStorage.removeItem('tankPixelSlot');
+      localStorage.removeItem('tankPixelBackup');
       location.reload();
     };
 
     socket.on('connect', () => {
       savedCode = localStorage.getItem('tankPixelRoom') || savedCode;
       token = localStorage.getItem('tankPixelToken') || token;
+      savedSlot = Number(localStorage.getItem('tankPixelSlot') || savedSlot);
       if (savedCode && token && !state) {
-        socket.emit('joinRoom', { code: savedCode, name: '', token });
+        socket.emit('joinRoom', { code: savedCode, name: '', token, preferredSlot: savedSlot });
       }
     });
     socket.on('disconnect', () => {
@@ -288,22 +326,30 @@
 
     socket.on('joined', ({ code, slot, token: nextToken }) => {
       mySlot = slot;
+      savedSlot = slot;
       token = nextToken;
       savedCode = code;
+      restoreAttempted = false;
       localStorage.setItem('tankPixelToken', token);
       localStorage.setItem('tankPixelRoom', code);
+      localStorage.setItem('tankPixelSlot', String(slot));
       const url = new URL(location.href);
       url.searchParams.set('room', code);
       history.replaceState(null, '', url);
       showGame();
     });
+    socket.on('roomMissing', ({ code }) => {
+      tryRestoreFromBrowserBackup(code || savedCode);
+    });
     socket.on('errorMessage', (message) => {
+      if (String(message || '').includes('部屋が見つかりません') && tryRestoreFromBrowserBackup(savedCode)) return;
       if (state) $('statusText').textContent = message;
       showStartError(message);
     });
     socket.on('state', (next) => {
       const wasFinished = state?.status === 'finished';
       state = next;
+      saveBrowserBackup();
       renderUI();
       if (!wasFinished && state.status === 'finished') {
         const names = (state.winnerSlots && state.winnerSlots.length ? state.winnerSlots : [state.winnerSlot])
@@ -332,8 +378,8 @@
     function renderUI() {
       if (!state) return;
       $('roomCode').textContent = state.code;
-      $('inviteLink').value = inviteLink(state.code);
-      $('statusText').textContent = `${state.gameMode === 'survival' ? 'サバイバル' : '通常'}｜アイテム${state.items?.length || 0}個｜${state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中')}`;
+      const itemText = state.itemsEnabled === false ? 'アイテムなし' : `アイテム${state.items?.length || 0}個`;
+      $('statusText').textContent = `${state.gameMode === 'survival' ? 'サバイバル' : '通常'}｜${itemText}｜${state.message || (state.status === 'waiting' ? '相手を待っています。' : '対戦中')}`;
       const maxPlayers = state.maxPlayers || state.tanks.length || 2;
       $('scoreboard').innerHTML = Array.from({ length: maxPlayers }, (_, i) => {
         const tank = state.tanks[i];

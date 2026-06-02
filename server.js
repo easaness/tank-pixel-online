@@ -350,6 +350,7 @@ function cloneRoomForSave(room) {
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
     gameMode: room.gameMode || 'score',
+    itemsEnabled: room.itemsEnabled !== false,
     bullets: room.bullets || [],
     winnerSlot: room.winnerSlot ?? null,
     winnerSlots: room.winnerSlots || [],
@@ -441,6 +442,8 @@ function loadRoomsFromDisk() {
         fastBulletUntil: tank.fastBulletUntil || 0,
         lastItem: tank.lastItem || '',
       }));
+      rawRoom.itemsEnabled = rawRoom.itemsEnabled !== false;
+      if (!rawRoom.itemsEnabled) { rawRoom.items = []; rawRoom.nextItemAt = 0; }
       rawRoom.lastTick = now;
       rawRoom.message = 'サーバー再起動後の部屋を復元しました。各プレイヤーは再接続してください。';
       rooms.set(rawRoom.code, rawRoom);
@@ -523,6 +526,7 @@ function publicState(room, viewerSlot = null) {
     status: room.status,
     maxPlayers: room.maxPlayers || 2,
     gameMode: room.gameMode || 'score',
+    itemsEnabled: room.itemsEnabled !== false,
     winnerSlot: room.winnerSlot,
     winnerSlots: room.winnerSlots || [],
     winScore: WIN_SCORE,
@@ -571,11 +575,16 @@ function normalizeGameMode(value) {
   return value === 'survival' ? 'survival' : 'score';
 }
 
-function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
+function normalizeItemMode(value) {
+  return value === 'off' || value === false ? false : true;
+}
+
+function createRoom(hostName, socket, playerCount = 2, gameMode = 'score', itemMode = 'on') {
   const code = roomCode();
   const token = cryptoToken();
   const maxPlayers = normalizePlayerCount(playerCount);
   const normalizedMode = normalizeGameMode(gameMode);
+  const itemsEnabled = normalizeItemMode(itemMode);
   const tanks = Array.from({ length: maxPlayers }, () => null);
   tanks[0] = makeTank(0, hostName, socket.id, token);
   const room = {
@@ -583,6 +592,7 @@ function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
     status: 'waiting',
     maxPlayers,
     gameMode: normalizedMode,
+    itemsEnabled,
     tanks,
     bullets: [],
     winnerSlot: null,
@@ -592,7 +602,7 @@ function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
     roundResetUntil: 0,
     obstacles: generateObstacles(),
     items: [],
-    nextItemAt: Date.now() + 1800,
+    nextItemAt: itemsEnabled ? Date.now() + 1800 : 0,
   };
   rooms.set(code, room);
   touchRoom(room);
@@ -604,15 +614,96 @@ function createRoom(hostName, socket, playerCount = 2, gameMode = 'score') {
   emitRoom(room);
 }
 
+
+function restoreRoomFromBrowserBackup(payload, socket) {
+  const backup = payload && payload.backup ? payload.backup : payload;
+  const code = String(backup?.code || backup?.state?.code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{5,12}$/.test(code)) {
+    socket.emit('errorMessage', '復旧用の部屋IDが不正です。');
+    return;
+  }
+  if (rooms.has(code)) {
+    joinRoom(code, backup?.name || '', socket, backup?.token || '', backup?.slot);
+    return;
+  }
+
+  const source = backup.state || {};
+  const maxPlayers = normalizePlayerCount(source.maxPlayers || (source.tanks || []).length || 2);
+  const gameMode = normalizeGameMode(source.gameMode);
+  const itemsEnabled = source.itemsEnabled !== false;
+  const tanks = Array.from({ length: maxPlayers }, (_, slot) => {
+    const savedTank = (source.tanks || [])[slot];
+    if (!savedTank) return null;
+    const spawn = SPAWNS[slot];
+    return {
+      ...makeTank(slot, savedTank.name || `P${slot + 1}`, '', ''),
+      connected: false,
+      socketId: '',
+      token: '',
+      x: Number.isFinite(savedTank.x) ? savedTank.x : spawn.x,
+      y: Number.isFinite(savedTank.y) ? savedTank.y : spawn.y,
+      angle: Number.isFinite(savedTank.angle) ? savedTank.angle : spawn.angle,
+      score: Number(savedTank.score || 0),
+      alive: savedTank.alive !== false,
+      color: savedTank.color || PLAYER_COLORS[slot] || '#facc15',
+      hold: false,
+      charge: 0,
+    };
+  });
+
+  const rawSelfSlot = Number(backup.slot);
+  const selfSlot = Number.isInteger(rawSelfSlot) && rawSelfSlot >= 0 && rawSelfSlot < maxPlayers ? rawSelfSlot : 0;
+  if (!tanks[selfSlot]) tanks[selfSlot] = makeTank(selfSlot, backup.name || `P${selfSlot + 1}`, '', '');
+  tanks[selfSlot].socketId = socket.id;
+  tanks[selfSlot].connected = true;
+  tanks[selfSlot].token = backup.token || cryptoToken();
+  if (backup.name) tanks[selfSlot].name = backup.name;
+
+  const room = {
+    code,
+    status: source.status === 'finished' ? 'finished' : (source.status === 'playing' ? 'playing' : 'waiting'),
+    maxPlayers,
+    gameMode,
+    itemsEnabled,
+    tanks,
+    bullets: [],
+    winnerSlot: source.winnerSlot ?? null,
+    winnerSlots: Array.isArray(source.winnerSlots) ? source.winnerSlots : [],
+    message: 'ブラウザ内のバックアップから部屋を復旧しました。各プレイヤーは自動再接続してください。',
+    lastTick: Date.now(),
+    lastTouched: Date.now(),
+    roundResetUntil: Date.now() + 900,
+    obstacles: Array.isArray(source.obstacles) && source.obstacles.length ? source.obstacles : generateObstacles(),
+    items: itemsEnabled && Array.isArray(source.items) ? source.items.filter((item) => item && Number.isFinite(item.x) && Number.isFinite(item.y)).map((item) => ({
+      id: item.id || cryptoToken(),
+      x: item.x,
+      y: item.y,
+      type: item.type || 'random',
+      hidden: !!item.hidden,
+    })) : [],
+    nextItemAt: itemsEnabled ? Date.now() + ITEM_SPAWN_INTERVAL_MS : 0,
+  };
+
+  rooms.set(code, room);
+  socket.join(code);
+  socket.data.roomCode = code;
+  socket.data.slot = selfSlot;
+  socket.data.token = tanks[selfSlot].token;
+  touchRoom(room);
+  socket.emit('joined', { code, slot: selfSlot, token: tanks[selfSlot].token });
+  emitRoom(room);
+}
+
 function joinedCount(room) {
   return room.tanks.filter(Boolean).length;
 }
 
-function joinRoom(code, name, socket, token) {
+function joinRoom(code, name, socket, token, preferredSlot = null) {
   code = String(code || '').trim().toUpperCase();
   const room = rooms.get(code);
   if (!room) {
-    socket.emit('errorMessage', '部屋が見つかりません。サーバーが再起動した可能性があります。部屋主が残っていれば同じ部屋IDで復元される場合がありますが、復元できない場合は新しい部屋を作ってください。');
+    socket.emit('roomMissing', { code });
+    socket.emit('errorMessage', '部屋が見つかりません。サーバー再起動直後の場合は、ブラウザ内のバックアップから自動復旧を試します。');
     return;
   }
 
@@ -620,6 +711,17 @@ function joinRoom(code, name, socket, token) {
   if (token) {
     slot = room.tanks.findIndex((tank) => tank && tank.token === token);
   }
+
+  const requestedSlot = Number(preferredSlot);
+  if (slot === -1 && Number.isInteger(requestedSlot) && requestedSlot >= 0 && requestedSlot < (room.maxPlayers || 2)) {
+    const requestedTank = room.tanks[requestedSlot];
+    // ブラウザバックアップから復旧された部屋では、他プレイヤーのtokenが空のことがあります。
+    // その場合だけ、保存済みスロットへ戻れるようにします。
+    if (!requestedTank || !requestedTank.token || requestedTank.connected === false) {
+      slot = requestedSlot;
+    }
+  }
+
   if (slot === -1) {
     slot = room.tanks.findIndex((tank) => !tank);
   }
@@ -631,9 +733,10 @@ function joinRoom(code, name, socket, token) {
   if (room.tanks[slot]) {
     room.tanks[slot].socketId = socket.id;
     room.tanks[slot].connected = true;
+    if (!room.tanks[slot].token) room.tanks[slot].token = token || cryptoToken();
     if (name) room.tanks[slot].name = name;
   } else {
-    token = cryptoToken();
+    token = token || cryptoToken();
     room.tanks[slot] = makeTank(slot, name, socket.id, token);
   }
 
@@ -662,7 +765,12 @@ function startMatch(room) {
     if (tank) tank.score = 0;
   });
   resetPositions(room);
-  resetItems(room);
+  if (room.itemsEnabled !== false) {
+    resetItems(room);
+  } else {
+    room.items = [];
+    room.nextItemAt = 0;
+  }
   room.message = room.gameMode === 'survival'
     ? `${room.maxPlayers}人サバイバル開始！最後まで生き残った1人が1ポイントです。`
     : `${room.maxPlayers}人対戦開始！地形はランダム生成されました。長押しで前進、2秒チャージで弾を発射します。`;
@@ -829,7 +937,12 @@ function endSurvivalRound(room, survivor) {
   }
 
   resetPositions(room);
-  resetItems(room);
+  if (room.itemsEnabled !== false) {
+    resetItems(room);
+  } else {
+    room.items = [];
+    room.nextItemAt = 0;
+  }
   touchRoom(room);
 }
 
@@ -876,7 +989,12 @@ function scorePoint(room, scorerSlots) {
   } else {
     room.message = `${scorers.map((tank) => tank.name).join('・')} が1ポイント！初期配置に戻ります。`;
     resetPositions(room);
-    resetItems(room);
+    if (room.itemsEnabled !== false) {
+      resetItems(room);
+    } else {
+      room.items = [];
+      room.nextItemAt = 0;
+    }
   }
   touchRoom(room);
 }
@@ -925,7 +1043,7 @@ function updateRoom(room, dt) {
     }
   }
 
-  if (room.status === 'playing') {
+  if (room.status === 'playing' && room.itemsEnabled !== false) {
     spawnRandomItem(room);
   }
 
@@ -994,8 +1112,9 @@ function updateRoom(room, dt) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, playerCount, gameMode }) => createRoom(name, socket, playerCount, gameMode));
-  socket.on('joinRoom', ({ code, name, token }) => joinRoom(code, name, socket, token));
+  socket.on('createRoom', ({ name, playerCount, gameMode, itemMode }) => createRoom(name, socket, playerCount, gameMode, itemMode));
+  socket.on('joinRoom', ({ code, name, token, preferredSlot }) => joinRoom(code, name, socket, token, preferredSlot));
+  socket.on('restoreRoom', ({ backup }) => restoreRoomFromBrowserBackup(backup, socket));
 
   socket.on('setHold', ({ hold }) => {
     const room = rooms.get(socket.data.roomCode);
